@@ -278,6 +278,15 @@ extension CGSize { subscript(axis: Axis) -> CGFloat { axis == .horizontal ? widt
         }
         // stacks and other containers splice group children with container-relative frames
         let base = n.transparent ? offset : CGPoint(x: abs.minX, y: abs.minY)
+        // safeAreaInset beside content that reaches the screen edge (a TabView, a List under a navigation bar): the
+        // inset stays out of the safe area (the home indicator, the status bar). Moved here, before mounting, so the
+        // layout keeps the frame it shows: an animated render does not move it out and back in (CustomLayout.swift
+        // still corrects what this pass cannot see, such as a scroll offset).
+        if let s = n as? _SafeAreaInsetNode, s.vertical, s.main.ignoresSafeArea, !s.inset.transparent {
+            let f = s.inset.frame.offsetBy(dx: base.x, dy: base.y), eps: CGFloat = 0.5
+            if s.edge == .bottom, f.maxY > safe.maxY + eps { s.inset.frame.origin.y -= f.maxY - safe.maxY }
+            if s.edge == .top, f.minY < safe.minY - eps { s.inset.frame.origin.y += safe.minY - f.minY }
+        }
         for c in n.children { extendIntoSafeArea(c, offset: base, safe: safe, bounds: bounds) }
         // .background { … .ignoresSafeArea() }: the background is not among the children, and it goes under the
         // bars when the view it backs touches the safe area (a full-screen cover's CanvasBackground)

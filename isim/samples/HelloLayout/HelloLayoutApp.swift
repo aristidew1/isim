@@ -1,7 +1,7 @@
 // Sample: SwiftUI layout on isim — Grid/GridRow, LazyHGrid, ViewThatFits, a custom Layout (flow) and AnyLayout,
 // alignment guides (built-in and custom AlignmentID), position, containerRelativeFrame, safeAreaInset, preferences
-// (PreferenceKey, anchors), onGeometryChange, @ScaledMetric, and scroll behaviours (paging, view-aligned snapping,
-// scrollPosition, scrollDisabled, contentMargins).
+// (PreferenceKey, anchors), onGeometryChange, @ScaledMetric, scroll behaviours (paging, view-aligned snapping,
+// scrollPosition, scrollDisabled, contentMargins), and ignoresSafeArea by region.
 import SwiftUI
 
 @main
@@ -15,6 +15,19 @@ struct Root: View {
             GridTab().tabItem { Label("Grid", systemImage: "square.grid.2x2") }
             AlignTab().tabItem { Label("Align", systemImage: "circle") }
             ScrollTab().tabItem { Label("Scroll", systemImage: "list.bullet") }
+            SafeTab().tabItem { Label("Safe", systemImage: "rectangle.bottomhalf.filled") }
+        }
+    }
+}
+
+/// ignoresSafeArea by region: `.keyboard` alone keeps the view out of the container safe area (below the status
+/// bar), `.container` takes it to the screen edge.
+struct SafeTab: View {
+    var body: some View {
+        HStack(spacing: 0) {
+            Color.orange.ignoresSafeArea(.keyboard, edges: .top).accessibilityIdentifier("ignores-keyboard")
+            Color.green.accessibilityIdentifier("ignores-none")
+            Color.blue.ignoresSafeArea(.container, edges: .top).accessibilityIdentifier("ignores-container")
         }
     }
 }

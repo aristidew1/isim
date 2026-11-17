@@ -146,8 +146,13 @@ extension View {
     public func fixedSize(horizontal: Bool, vertical: Bool) -> some View {
         _modify { ctx, c in _FixedSizeNode(path: ctx.path, horizontal: horizontal, vertical: vertical, child: _resolve(c, ctx.child("fx"))) }
     }
+    /// Only the container region (the bars, the home indicator) is extended into; isim does not move content out of
+    /// the keyboard's way, so `.keyboard` alone leaves the view where it is (as SwiftUI does with no keyboard shown).
     public func ignoresSafeArea(_ regions: SafeAreaRegions = .all, edges: Edge.Set = .all) -> some View {
-        _modify { ctx, c in _IgnoreSafeAreaNode(path: ctx.path, edges: edges, child: _resolve(c, ctx.child("isa"))) }
+        _modify { ctx, c in
+            let child = _resolve(c, ctx.child("isa"))
+            return regions.contains(.container) ? _IgnoreSafeAreaNode(path: ctx.path, edges: edges, child: child) : child
+        }
     }
     public func edgesIgnoringSafeArea(_ edges: Edge.Set) -> some View { ignoresSafeArea(.all, edges: edges) }
     public func id<ID: Hashable>(_ id: ID) -> some View { _modify { ctx, c in _IDNode(path: ctx.path, tag: "\(id)", child: _resolve(c, ctx.child("id:\(id)"))) } }

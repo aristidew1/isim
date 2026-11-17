@@ -115,3 +115,17 @@ def test_scroll(launch):
         "scrollPosition binding scrolls"
     assert "(0 0; 402 x 60) text=offset 0, content 402 x 282" in both, "scrollDisabled"
     assert "(30 0;" in line_near(scroll, r"id=m0", -1), "contentMargins"
+
+
+def test_ignores_safe_area_regions(launch):
+    app = launch("HelloLayout")
+    app.wait_tap_id("tab-Safe")
+    app.wait_view(r"id=ignores-keyboard")
+    app.wait_still()
+    dump = app.view_dump()
+    assert app.quit() == 0, "exits cleanly"
+
+    keyboard, none, container = (frame(dump, i) for i in ("ignores-keyboard", "ignores-none", "ignores-container"))
+    # heights: frames are relative to the superview
+    assert keyboard[3] == none[3], "ignoresSafeArea(.keyboard) leaves the container safe area alone"
+    assert container[3] > none[3], "ignoresSafeArea(.container) reaches the screen edge"
