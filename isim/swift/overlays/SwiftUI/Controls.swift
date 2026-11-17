@@ -66,7 +66,7 @@ final class _SliderNode: _Node {
         self.value = value; self.bounds = bounds; self.step = step; self.onEditingChanged = onEditingChanged; self.tint = tint; self.enabled = enabled
         super.init(path: path, children: [])
     }
-    override func sizeThatFits(_ p: _Proposal) -> CGSize { CGSize(width: p.width ?? 200, height: 31) }
+    override func _measure(_ p: _Proposal) -> CGSize { CGSize(width: p.width ?? 200, height: 31) }
     override var isSpacer: Bool { false }
     override func mountView(_ g: _Graph) -> UIView {
         let s = g.view(viewKey) { _SUISlider(frame: .zero) }
@@ -162,7 +162,7 @@ final class _StepperNode: _Node {
     init(path: String, canInc: Bool, canDec: Bool, inc: (() -> Void)?, dec: (() -> Void)?) {
         self.canInc = canInc; self.canDec = canDec; self.inc = inc; self.dec = dec; super.init(path: path, children: [])
     }
-    override func sizeThatFits(_ p: _Proposal) -> CGSize { CGSize(width: 94, height: 32) }
+    override func _measure(_ p: _Proposal) -> CGSize { CGSize(width: 94, height: 32) }
     override func mountView(_ g: _Graph) -> UIView {
         let s = g.view(viewKey) { _SUIStepper(frame: .zero) }
         s.node = self
@@ -241,7 +241,7 @@ final class _PickerNode: _WrapperNode {
         super.init(path: path, child: child)
     }
     override var layoutPriority: Double { child.layoutPriority }
-    override func sizeThatFits(_ p: _Proposal) -> CGSize { child.sizeThatFits(p) }
+    override func _measure(_ p: _Proposal) -> CGSize { child.sizeThatFits(p) }
     override func place(_ rect: CGRect) { frame = rect; child.place(CGRect(origin: .zero, size: rect.size)) }
     override var transparent: Bool { false }
     var menu: UIMenu {
@@ -352,7 +352,7 @@ final class _SegmentedNode: _Node {
         self.titles = titles; self.selected = selected; self.onSelect = onSelect; self.enabled = enabled
         super.init(path: path, children: [])
     }
-    override func sizeThatFits(_ p: _Proposal) -> CGSize {
+    override func _measure(_ p: _Proposal) -> CGSize {
         let l = UILabel(); l.font = .systemFont(ofSize: 13, weight: .semibold)
         let natural = titles.map { t -> CGFloat in l.text = t; return l.sizeThatFits(CGSize(width: 1000, height: 100)).width + 24 }.max() ?? 40
         return CGSize(width: p.width ?? natural * CGFloat(max(1, titles.count)), height: 32)
@@ -432,7 +432,7 @@ final class _MenuNode: _WrapperNode {
         self.build = build; self.primaryAction = primaryAction; self.enabled = enabled
         super.init(path: path, child: child)
     }
-    override func sizeThatFits(_ p: _Proposal) -> CGSize { child.sizeThatFits(p) }
+    override func _measure(_ p: _Proposal) -> CGSize { child.sizeThatFits(p) }
     override func place(_ rect: CGRect) { frame = rect; child.place(CGRect(origin: .zero, size: rect.size)) }
     override func mountView(_ g: _Graph) -> UIView {
         let c = g.view(viewKey) { _SUIControl(frame: .zero) }

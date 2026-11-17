@@ -89,7 +89,7 @@ final class _WheelNode: _Node {
         self.columns = columns; self.selected = selected; self.weights = weights ?? columns.map { _ in 1 }; self.onSelect = onSelect; self.enabled = enabled
         super.init(path: path, children: [])
     }
-    override func sizeThatFits(_ p: _Proposal) -> CGSize { CGSize(width: min(p.width ?? 320, 1e6), height: 216) }
+    override func _measure(_ p: _Proposal) -> CGSize { CGSize(width: min(p.width ?? 320, 1e6), height: 216) }
     override func mountView(_ g: _Graph) -> UIView {
         let w = g.view(viewKey) { _SUIWheel(frame: .zero) }
         while w.columns.count > columns.count { w.columns.removeLast().removeFromSuperview() }
@@ -507,7 +507,7 @@ final class _ColorWellNode: _Node {
         self.selection = selection; self.supportsOpacity = supportsOpacity; self.title = title; self.enabled = enabled
         super.init(path: path, children: [])
     }
-    override func sizeThatFits(_ p: _Proposal) -> CGSize { CGSize(width: 28, height: 28) }
+    override func _measure(_ p: _Proposal) -> CGSize { CGSize(width: 28, height: 28) }
     override func mountView(_ g: _Graph) -> UIView {
         let w = g.view(viewKey) { _SUIColorWell(frame: .zero) }
         w.binding = selection

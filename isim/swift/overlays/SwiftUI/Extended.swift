@@ -345,7 +345,7 @@ final class _EffectNode: _WrapperNode {
     var zIndexValue = 0.0
     var shadow: (UIColor, CGFloat, CGFloat, CGFloat)?
     override var layoutPriority: Double { child.layoutPriority }
-    override func sizeThatFits(_ p: _Proposal) -> CGSize { child.sizeThatFits(p) }
+    override func _measure(_ p: _Proposal) -> CGSize { child.sizeThatFits(p) }
     override func place(_ rect: CGRect) { frame = rect; child.place(CGRect(origin: .zero, size: rect.size)) }
     var transform: CGAffineTransform {
         // transforms about an anchor, expressed about the view's center (UIKit's transform origin)
@@ -374,7 +374,7 @@ final class _OffsetNode: _WrapperNode {
     let dx: CGFloat, dy: CGFloat
     init(path: String, dx: CGFloat, dy: CGFloat, child: _Node) { self.dx = dx; self.dy = dy; super.init(path: path, child: child) }
     override var layoutPriority: Double { child.layoutPriority }
-    override func sizeThatFits(_ p: _Proposal) -> CGSize { child.sizeThatFits(p) }
+    override func _measure(_ p: _Proposal) -> CGSize { child.sizeThatFits(p) }
     // the offset moves this node's own view, so the content is drawn and hit-tested at the new position
     override func place(_ rect: CGRect) { frame = rect.offsetBy(dx: dx, dy: dy); child.place(CGRect(origin: .zero, size: rect.size)) }
 }
@@ -419,7 +419,7 @@ final class _OverlayNode: _WrapperNode {
         children.append(overlay)
     }
     override var layoutPriority: Double { child.layoutPriority }
-    override func sizeThatFits(_ p: _Proposal) -> CGSize { child.sizeThatFits(p) }
+    override func _measure(_ p: _Proposal) -> CGSize { child.sizeThatFits(p) }
     override func place(_ rect: CGRect) {
         frame = rect
         child.place(CGRect(origin: .zero, size: rect.size))
@@ -511,7 +511,7 @@ final class _GeometryNode: _Node {
         super.init(path: path, children: [])
     }
     override var transparent: Bool { false }
-    override func sizeThatFits(_ p: _Proposal) -> CGSize { CGSize(width: min(p.width ?? 10, 1e6), height: min(p.height ?? 10, 1e6)) }
+    override func _measure(_ p: _Proposal) -> CGSize { CGSize(width: min(p.width ?? 10, 1e6), height: min(p.height ?? 10, 1e6)) }
     override func place(_ rect: CGRect) {
         frame = rect
         let g = ctx.graph, key = viewKey, local = CGRect(origin: .zero, size: rect.size)
@@ -548,7 +548,7 @@ final class _ScrollNode: _WrapperNode {
         _Proposal(width: axes.contains(.horizontal) ? nil : p.width, height: axes.contains(.vertical) ? nil : p.height)
     }
     var options = _ScrollOptions()
-    override func sizeThatFits(_ p: _Proposal) -> CGSize {
+    override func _measure(_ p: _Proposal) -> CGSize {
         _containerSizes.append(CGSize(width: min(p.width ?? 1e6, 1e6), height: min(p.height ?? 1e6, 1e6)))
         defer { _containerSizes.removeLast() }
         let c = child.sizeThatFits(contentProposal(p))
@@ -643,7 +643,7 @@ final class _IDNode: _WrapperNode {
     init(path: String, tag: String, child: _Node) { self.idTag = tag; super.init(path: path, child: child) }
     override var layoutPriority: Double { child.layoutPriority }
     override var isSpacer: Bool { child.isSpacer }
-    override func sizeThatFits(_ p: _Proposal) -> CGSize { child.sizeThatFits(p) }
+    override func _measure(_ p: _Proposal) -> CGSize { child.sizeThatFits(p) }
     override func place(_ rect: CGRect) { frame = rect; child.place(CGRect(origin: .zero, size: rect.size)) }
     override func mountView(_ g: _Graph) -> UIView { let v = g.view(viewKey) { _PassthroughView() }; g.idViews[idTag] = v; return v }
 }
@@ -791,7 +791,7 @@ final class _RepresentableNode<R: UIViewRepresentable>: _Node {
         graph.storage[key] = s
         return s
     }
-    override func sizeThatFits(_ p: _Proposal) -> CGSize {
+    override func _measure(_ p: _Proposal) -> CGSize {
         let s0 = state
         if let own = rep.sizeThatFits(ProposedViewSize(width: p.width, height: p.height), uiView: s0.view,
                                       context: UIViewRepresentableContext(coordinator: s0.coordinator, environment: env)) { return own }
@@ -841,7 +841,7 @@ final class _VCRepresentableNode<R: UIViewControllerRepresentable>: _Node {
         graph.storage[key] = s
         return s
     }
-    override func sizeThatFits(_ p: _Proposal) -> CGSize {
+    override func _measure(_ p: _Proposal) -> CGSize {
         let s = state
         if let own = rep.sizeThatFits(ProposedViewSize(width: p.width, height: p.height), uiViewController: s.vc,
                                       context: UIViewControllerRepresentableContext(coordinator: s.coord, environment: env)) { return own }
@@ -873,7 +873,7 @@ final class _AspectNode: _WrapperNode {
         let s = child.sizeThatFits(.unspecified)
         return s.width > 0 && s.height > 0 ? s.width / s.height : nil
     }
-    override func sizeThatFits(_ p: _Proposal) -> CGSize {
+    override func _measure(_ p: _Proposal) -> CGSize {
         guard let r = aspect() else { return child.sizeThatFits(p) }
         let ideal = child.sizeThatFits(.unspecified)
         let pw = p.width.map { min($0, 1e6) }, ph = p.height.map { min($0, 1e6) }

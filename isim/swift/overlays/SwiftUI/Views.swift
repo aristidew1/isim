@@ -57,6 +57,11 @@ public enum TextAlignment: Hashable, CaseIterable, Sendable { case leading, cent
 
 // MARK: - Color & styles
 
+extension UIColor {
+    /// The UIKit color of a SwiftUI one; it keeps following the appearance (light, dark) where it is used.
+    public convenience init(_ color: Color) { self.init(dynamicProvider: { _ in color.uiColor }) }
+}
+
 public protocol ShapeStyle {}
 
 /// Like Apple's, Color is Sendable and not main-actor isolated (its View conformance is in an extension), so apps can
@@ -267,6 +272,8 @@ extension Font {
     public init(_ font: UIFont) { self.init(size: font.pointSize, weight: .regular); platform = _PlatformFont(font) }
     /// A font from a Core Text font: the face with that PostScript name, at its size.
     public init(_ font: CTFont) {
+        // a UIFont passed as a CTFont (`uiFont as CTFont`) is that UIFont: keep its descriptor (features, variations)
+        if let ui = font as AnyObject as? UIFont { self.init(ui); return }
         let name = CTFontCopyPostScriptName(font) as String, size = CTFontGetSize(font)
         self.init(UIFont(name: name, size: size) ?? .systemFont(ofSize: size))
     }
@@ -379,13 +386,21 @@ final class _TextNode: _Node {
     let text: String, font: UIFont, color: UIColor, minLines: Int?, maxLines: Int?, alignment: TextAlignment
     var truncation = Text.TruncationMode.tail, minimumScale: CGFloat = 1, tightening = false
     var contentTransition: ContentTransition?
+    /// .lineSpacing: the space added between lines (drawn and measured through a paragraph style)
+    var lineSpacing: CGFloat = 0
+    func _spaced(_ s: String, align: NSTextAlignment) -> NSAttributedString? {
+        guard lineSpacing > 0, maxLines != 1, !s.isEmpty else { return nil }
+        let p = NSMutableParagraphStyle(); p.lineSpacing = lineSpacing; p.alignment = align
+        return NSAttributedString(string: s, attributes: [.font: font, .foregroundColor: color, .paragraphStyle: p])
+    }
     init(path: String, text: String, font: UIFont, color: UIColor, minLines: Int?, maxLines: Int?, alignment: TextAlignment) {
         self.text = text; self.font = font; self.color = color; self.minLines = minLines; self.maxLines = maxLines; self.alignment = alignment
         super.init(path: path, children: [])
     }
-    override func sizeThatFits(_ p: _Proposal) -> CGSize {
+    override func _measure(_ p: _Proposal) -> CGSize {
         let l = _measureLabel
         l.text = text; l.font = font; l.numberOfLines = maxLines ?? 0
+        if let a = _spaced(text, align: .left) { l.attributedText = a }
         let w = p.width ?? 1e6
         var s = l.sizeThatFits(CGSize(width: w >= 1e6 ? 0 : max(1, w), height: 1e6))
         if w < 1e6 {
@@ -415,6 +430,7 @@ final class _TextNode: _Node {
         l.adjustsFontSizeToFitWidth = minimumScale < 1; l.minimumScaleFactor = minimumScale
         l.allowsDefaultTighteningForTruncation = tightening          // allowsTightening
         l.textAlignment = alignment == .center ? .center : (alignment == .trailing) != isRTL ? .right : .left
+        if let a = _spaced(shown, align: l.textAlignment) { l.attributedText = a }
         return l
     }
 }
@@ -517,7 +533,7 @@ final class _ImageNode: _Node {
     init(path: String, image: UIImage?, tint: UIColor?, resizable: Bool) {
         self.image = image; self.tint = tint; self.resizable = resizable; super.init(path: path, children: [])
     }
-    override func sizeThatFits(_ p: _Proposal) -> CGSize {
+    override func _measure(_ p: _Proposal) -> CGSize {
         let s = image?.size ?? .zero
         if resizable { return CGSize(width: p.width ?? s.width, height: p.height ?? s.height) }
         return s
@@ -543,7 +559,7 @@ public struct VStack<Content: View>: View, _PrimitiveView {
     }
     public var body: Never { fatalError() }
     func _makeNode(_ ctx: _Context) -> _Node {
-        _StackNode(path: ctx.path, axis: .vertical, spacing: spacing, alignment: Alignment(horizontal: alignment, vertical: .center), children: [_resolve(content, ctx.child("c"))])
+        _StackNode(path: ctx.path, axis: .vertical, spacing: spacing, alignment: Alignment(horizontal: alignment, vertical: .center), children: [_resolve(content, ctx.child("c").with { $0._stackAxis = .vertical })])
     }
 }
 public struct HStack<Content: View>: View, _PrimitiveView {
@@ -553,20 +569,25 @@ public struct HStack<Content: View>: View, _PrimitiveView {
     }
     public var body: Never { fatalError() }
     func _makeNode(_ ctx: _Context) -> _Node {
-        _StackNode(path: ctx.path, axis: .horizontal, spacing: spacing, alignment: Alignment(horizontal: .center, vertical: alignment), children: [_resolve(content, ctx.child("c"))])
+        _StackNode(path: ctx.path, axis: .horizontal, spacing: spacing, alignment: Alignment(horizontal: .center, vertical: alignment), children: [_resolve(content, ctx.child("c").with { $0._stackAxis = .horizontal })])
     }
 }
 public struct ZStack<Content: View>: View, _PrimitiveView {
     let alignment: Alignment, content: Content
     public init(alignment: Alignment = .center, @ViewBuilder content: () -> Content) { self.alignment = alignment; self.content = content() }
     public var body: Never { fatalError() }
-    func _makeNode(_ ctx: _Context) -> _Node { _ZStackNode(path: ctx.path, alignment: alignment, children: [_resolve(content, ctx.child("c"))]) }
+    func _makeNode(_ ctx: _Context) -> _Node { _ZStackNode(path: ctx.path, alignment: alignment, children: [_resolve(content, ctx.child("c").with { $0._stackAxis = nil })]) }
 }
+/// The axis of the stack a view is in (nil: none, or a ZStack): a Spacer wrapped in a frame or a modifier inside an
+/// HStack still grows only along the stack (`Spacer().frame(width: 10)` is a fixed gap, not a full-height view)
+struct _StackAxisKey: EnvironmentKey { static var defaultValue: Axis? { nil } }
+extension EnvironmentValues { var _stackAxis: Axis? { get { self[_StackAxisKey.self] } set { self[_StackAxisKey.self] = newValue } } }
+
 public struct Spacer: View, _PrimitiveView {
     let minLength: CGFloat?
     public init(minLength: CGFloat? = nil) { self.minLength = minLength }
     public var body: Never { fatalError() }
-    func _makeNode(_ ctx: _Context) -> _Node { _SpacerNode(path: ctx.path, minLength: minLength) }
+    func _makeNode(_ ctx: _Context) -> _Node { let n = _SpacerNode(path: ctx.path, minLength: minLength); n.axis = ctx.environment._stackAxis; return n }
 }
 public struct Divider: View, _PrimitiveView {
     public init() {}
@@ -668,6 +689,9 @@ extension Button where Label == SwiftUI.Label<Text, Image> {
     public init(_ titleKey: LocalizedStringKey, systemImage: String, role: ButtonRole?, action: @escaping () -> Void) {
         self.init(role: role, action: action) { SwiftUI.Label(titleKey, systemImage: systemImage) }
     }
+    @_disfavoredOverload public init<S: StringProtocol>(_ title: S, systemImage: String, role: ButtonRole?, action: @escaping () -> Void) {
+        self.init(role: role, action: action) { SwiftUI.Label(title, systemImage: systemImage) }
+    }
 }
 
 final class _ButtonNode: _WrapperNode {
@@ -682,7 +706,7 @@ final class _ButtonNode: _WrapperNode {
         super.init(path: path, child: child)
         rowAction = enabled ? action : nil
     }
-    override func sizeThatFits(_ p: _Proposal) -> CGSize { child.sizeThatFits(p) }
+    override func _measure(_ p: _Proposal) -> CGSize { child.sizeThatFits(p) }
     override func place(_ rect: CGRect) { frame = rect; child.place(CGRect(origin: .zero, size: rect.size)) }
     override func mountView(_ g: _Graph) -> UIView {
         // a button that is a whole list row is handled by the row (full-width highlight); nested ones are controls
@@ -865,8 +889,15 @@ final class _TextFieldNode: _Node {
     }
     var minLines: Int { axis == .vertical ? (lines.0 ?? 1) : 1 }
     var maxLines: Int { axis == .vertical ? (lines.1 ?? 0) : 1 }
-    override func sizeThatFits(_ p: _Proposal) -> CGSize {
-        let w = min(p.width ?? 200, 1e6)
+    override func _measure(_ p: _Proposal) -> CGSize {
+        // ideal width (fixedSize, or no width offered): the text's, or the placeholder's when empty, like SwiftUI's
+        // TextField; a width is otherwise taken whole
+        let ideal: CGFloat = {
+            let l = _measureLabel
+            l.text = text.wrappedValue.isEmpty ? placeholder : text.wrappedValue; l.font = font; l.numberOfLines = 1
+            return ceil(l.sizeThatFits(CGSize(width: 0, height: 1e6)).width) + 2 + (traits.roundedBorder ? 14 : 0)   // + the caret
+        }()
+        let w = min(p.width ?? ideal, 1e6)
         let line = ceil(font.lineHeight)
         var h = line * CGFloat(minLines)
         if traits.roundedBorder && axis != .vertical { h += 14 }           // .textFieldStyle(.roundedBorder)

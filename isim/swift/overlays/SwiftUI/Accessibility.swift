@@ -36,6 +36,11 @@ public struct AccessibilityActionKind: Equatable, Sendable {
     init(name: String) { self.name = name }
 }
 
+/// The buttons under `n`, in order (accessibilityActions).
+@MainActor func _buttonNodes(_ n: _Node) -> [_ButtonNode] {
+    if let b = n as? _ButtonNode { return [b] }
+    return _flatten(n.children).flatMap { _buttonNodes($0) }
+}
 @MainActor func _accessibilityTexts(_ n: _Node) -> [String] {
     var out: [String] = []
     func walk(_ x: _Node) {
@@ -100,6 +105,22 @@ extension View {
     public func accessibilityAction(named name: Text, _ handler: @escaping () -> Void) -> some View { accessibilityAction(AccessibilityActionKind(named: name), handler) }
     public func accessibilityAction(named key: LocalizedStringKey, _ handler: @escaping () -> Void) -> some View { accessibilityAction(named: Text(key), handler) }
     @_disfavoredOverload public func accessibilityAction<S: StringProtocol>(named name: S, _ handler: @escaping () -> Void) -> some View { accessibilityAction(named: Text(name), handler) }
+    /// The buttons of `content` as the element's custom actions (iOS 16).
+    public func accessibilityActions<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
+        let items = content()
+        return _modify { ctx, c in
+            let n = _resolve(c, ctx.child("ax"))
+            let buttons = _buttonNodes(_resolve(items, ctx.child("ax-actions").with { $0._inList = false }))
+            let actions = buttons.filter(\.enabled).map { b in
+                UIAccessibilityCustomAction(name: _collectText(b).joined(separator: " ")) { [action = b.action] _ in MainActor.assumeIsolated { action() }; return true }
+            }
+            _tagDeepest(n) { $0.accessibilityApply.append { v in
+                let names = Set(actions.map(\.name))
+                v.accessibilityCustomActions = (v.accessibilityCustomActions ?? []).filter { !names.contains($0.name) } + actions
+            } }
+            return n
+        }
+    }
     public func accessibilityAdjustableAction(_ handler: @escaping (AccessibilityAdjustmentDirection) -> Void) -> some View {
         let block: @convention(block) (Int) -> Void = { d in MainActor.assumeIsolated { handler(d > 0 ? .increment : .decrement) } }
         return _accessibility { v in v.perform(NSSelectorFromString("_isim_setAccessibilityAdjustHandler:"), with: block as AnyObject) }

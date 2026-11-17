@@ -111,7 +111,11 @@ public struct TabView<SelectionValue: Hashable, Content: View>: View, _Primitive
         let host = (g.storage[hostKey] as? _TabSearchHost) ?? { let h = _TabSearchHost(); g.storage[hostKey] = h; return h }()
         host.config = nil
         host.activateOnSelection = ctx.environment._tabSearchActivate
+        let outerDeferred = g.lifecycleDeferred
+        g.lifecycleDeferred = []
         var children = _flatten([_resolve(content, ctx.child("tabs").with { $0._tabStyle = .bar; $0._tabSearchHost = _tabBarMode() == 1 ? host : nil })])
+        let deferred = g.lifecycleDeferred ?? []
+        g.lifecycleDeferred = outerDeferred
         g.safeArea = saved
         var items = children.map { c -> _TabItemInfo in
             var x: _Node? = c, item: _Node?, badge: String?, role = 0, section: String?, cid: String?, sid: String?, beh = 0
@@ -154,6 +158,16 @@ public struct TabView<SelectionValue: Hashable, Content: View>: View, _Primitive
         let stored = (g.storage[key] as? _StateStorage<AnyHashable>) ?? { let s = _StateStorage<AnyHashable>(tags.first ?? AnyHashable(0)); g.storage[key] = s; return s }()
         let current = selection.map { AnyHashable($0.wrappedValue) } ?? stored.value
         let index = tags.firstIndex(of: current) ?? 0
+        // onAppear / task of the tabs on screen or already visited (a page-style TabView shows its neighbours: all)
+        let visitedKey = ctx.path + "#visited"
+        g.usedKeys.insert(visitedKey)
+        let visited = (g.storage[visitedKey] as? _StateStorage<Set<AnyHashable>>) ?? { let s = _StateStorage<Set<AnyHashable>>([]); g.storage[visitedKey] = s; return s }()
+        if index < tags.count { visited.value.insert(tags[index]) }
+        let isBar: Bool = { if case .bar = style { return true }; return false }()
+        let active = children.indices.filter { !isBar || visited.value.contains(tags[$0]) }.map { children[$0].path }
+        for d in deferred where active.contains(where: { d.path == $0 || $0.hasPrefix(d.path + "/") || d.path.hasPrefix($0 + "/") }) {
+            g._lifecycle(d.path, d.start)
+        }
         let sel = selection
         let select: (Int) -> Void = { [weak g] i in
             guard i >= 0, i < tags.count else { return }
@@ -218,7 +232,7 @@ final class _TabViewNode: _Node {
         super.init(path: path, children: tabs)
     }
     override var ignoresSafeArea: Bool { if case .bar = style { return true }; return false }
-    override func sizeThatFits(_ p: _Proposal) -> CGSize { CGSize(width: p.width ?? 320, height: p.height ?? 480) }
+    override func _measure(_ p: _Proposal) -> CGSize { CGSize(width: p.width ?? 320, height: p.height ?? 480) }
     var barHeight: CGFloat { barHidden || _tabBarMode() >= 2 ? 0 : 49 + safeBottom }
     override func place(_ rect: CGRect) {
         frame = rect

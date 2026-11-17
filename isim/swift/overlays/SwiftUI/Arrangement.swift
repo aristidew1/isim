@@ -162,7 +162,7 @@ final class _ArrangementNode: _Node {
         // overlay: the secondary is mounted first, so the primary is on top
         super.init(path: path, children: kind == 1 ? [secondary, primary] : [primary, secondary])
     }
-    override func sizeThatFits(_ p: _Proposal) -> CGSize { CGSize(width: p.width ?? 320, height: p.height ?? 480) }
+    override func _measure(_ p: _Proposal) -> CGSize { CGSize(width: p.width ?? 320, height: p.height ?? 480) }
     static func sizing(_ n: _Node) -> _ArrangementSizing? {
         var x: _Node? = n
         while let c = x { if let s = c.arrangementSizing { return s }; x = c.children.count == 1 ? c.children[0] : nil }

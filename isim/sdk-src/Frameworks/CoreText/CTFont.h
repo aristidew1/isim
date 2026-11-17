@@ -5,7 +5,13 @@
 __BEGIN_DECLS
 #pragma clang arc_cf_code_audited begin
 #pragma clang assume_nonnull begin      /* like Apple's CF_ASSUME_NONNULL_BEGIN: unannotated pointers are nonnull */
+/* Toll-free bridged with UIFont, as on iOS: Swift converts between them with `as`. Objective-C keeps `id`, which
+ * also lets CoreText's own font objects through its bridge casts. */
+#if defined(__swift__)
+typedef const struct __attribute__((objc_bridge(UIFont))) __CTFont *CTFontRef;
+#else
 typedef const struct __attribute__((objc_bridge(id))) __CTFont *CTFontRef;
+#endif
 #ifndef CT_EXPORT
 #define CT_EXPORT extern __attribute__((visibility("default")))
 #endif

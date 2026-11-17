@@ -33,7 +33,7 @@ final class _GridCellNode: _WrapperNode {
     var anchor: UnitPoint?
     var unsized: Axis.Set = []
     override var layoutPriority: Double { child.layoutPriority }
-    override func sizeThatFits(_ p: _Proposal) -> CGSize { child.sizeThatFits(p) }
+    override func _measure(_ p: _Proposal) -> CGSize { child.sizeThatFits(p) }
     override func place(_ rect: CGRect) { frame = rect; child.place(CGRect(origin: .zero, size: rect.size)) }
 }
 @MainActor func _gridCell(_ n: _Node) -> _GridCellNode? {
@@ -123,7 +123,7 @@ final class _GridLayoutNode: _Node {
         }
         return (widths, heights, total)
     }
-    override func sizeThatFits(_ p: _Proposal) -> CGSize {
+    override func _measure(_ p: _Proposal) -> CGSize {
         let (_, heights, total) = layout(p)
         return CGSize(width: total, height: heights.reduce(0, +) + vSpacing * CGFloat(max(0, heights.count - 1)))
     }
@@ -200,7 +200,7 @@ final class _ViewThatFitsNode: _Node {
         }
         return max(0, children.count - 1)
     }
-    override func sizeThatFits(_ p: _Proposal) -> CGSize {
+    override func _measure(_ p: _Proposal) -> CGSize {
         guard !children.isEmpty else { return .zero }
         return children[choose(p)].sizeThatFits(p)
     }

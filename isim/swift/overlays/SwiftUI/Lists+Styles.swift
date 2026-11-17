@@ -170,7 +170,7 @@ final class _ListRowOptionsNode: _WrapperNode {
     let options = _ListRowOptions()
     override init(path: String, child: _Node) { super.init(path: path, child: child); tag = child.tag; badge = child.badge }
     override var layoutPriority: Double { child.layoutPriority }
-    override func sizeThatFits(_ p: _Proposal) -> CGSize { child.sizeThatFits(p) }
+    override func _measure(_ p: _Proposal) -> CGSize { child.sizeThatFits(p) }
     override func place(_ rect: CGRect) { frame = rect; child.place(CGRect(origin: .zero, size: rect.size)) }
 }
 /// The options that apply to a row: the innermost modifier of each kind wins.

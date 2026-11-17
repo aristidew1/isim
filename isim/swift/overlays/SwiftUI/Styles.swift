@@ -158,7 +158,7 @@ extension View {
 }
 /// A redacted text: a rounded grey bar per line.
 final class _RedactedTextNode: _WrapperNode {
-    override func sizeThatFits(_ p: _Proposal) -> CGSize { child.sizeThatFits(p) }
+    override func _measure(_ p: _Proposal) -> CGSize { child.sizeThatFits(p) }
     override func place(_ rect: CGRect) { frame = rect }
     override func mountView(_ g: _Graph) -> UIView {
         let v = g.view(viewKey) { UIView() }

@@ -28,6 +28,10 @@ CF_EXPORT UniChar CFStringGetCharacterAtIndex(CFStringRef theString, CFIndex idx
 CF_EXPORT void CFStringGetCharacters(CFStringRef theString, CFRange range, UniChar *buffer);
 CF_EXPORT Boolean CFStringGetCString(CFStringRef theString, char *buffer, CFIndex bufferSize, CFStringEncoding encoding);
 CF_EXPORT const char *CFStringGetCStringPtr(CFStringRef theString, CFStringEncoding encoding);
+CF_EXPORT CFIndex CFStringGetBytes(CFStringRef theString, CFRange range, CFStringEncoding encoding, UInt8 lossByte,
+                                   Boolean isExternalRepresentation, UInt8 *buffer, CFIndex maxBufLen, CFIndex *usedBufLen);
+CF_EXPORT CFStringEncoding CFStringGetFastestEncoding(CFStringRef theString);
+CF_EXPORT CFStringEncoding CFStringGetSmallestEncoding(CFStringRef theString);
 CF_EXPORT CFIndex CFStringGetMaximumSizeForEncoding(CFIndex length, CFStringEncoding encoding);
 CF_EXPORT CFComparisonResult CFStringCompare(CFStringRef theString1, CFStringRef theString2, CFOptionFlags compareOptions);
 CF_EXPORT void CFStringAppend(CFMutableStringRef theString, CFStringRef appendedString);

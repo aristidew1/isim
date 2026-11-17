@@ -33,6 +33,12 @@ extension CGSize { subscript(axis: Axis) -> CGFloat { axis == .horizontal ? widt
     var tasks: [String: Task<Void, Never>] = [:]
     var usedTasks: Set<String> = []
     var appeared: Set<String> = []
+    /// TabView: the lifecycle starts (onAppear, task) met while resolving its tabs, kept to run only for the tabs that
+    /// are on screen or were visited (iOS starts a tab's tasks the first time it is shown); nil outside a TabView
+    var lifecycleDeferred: [(path: String, start: () -> Void)]? = nil
+    func _lifecycle(_ path: String, _ start: @escaping () -> Void) {
+        if lifecycleDeferred != nil { lifecycleDeferred!.append((path, start)) } else { start() }
+    }
     var usedAppear: Set<String> = []
     var disappearActions: [String: () -> Void] = [:]
     var rendering = false, pending = false
@@ -171,6 +177,7 @@ extension CGSize { subscript(axis: Axis) -> CGFloat { axis == .horizontal ? widt
     var renderCount = 0                                           // renders so far (the animation ticker waits for one)
 
     func render(bounds: CGRect, safeArea: UIEdgeInsets, traits: UITraitCollection) {
+        _Node.layoutEpoch += 1
         renderCount += 1
         rendering = true
         defer { rendering = false }
@@ -224,6 +231,7 @@ extension CGSize { subscript(axis: Axis) -> CGFloat { axis == .horizontal ? widt
 
     /// Lays out the root for a proposal without mounting it (UIHostingController.sizeThatFits(in:)).
     func measure(_ size: CGSize, traits: UITraitCollection) -> CGSize {
+        _Node.layoutEpoch += 1
         guard !rendering else { return size }
         var env = EnvironmentValues()
         env.colorScheme = traits.userInterfaceStyle == .dark ? .dark : .light
@@ -271,6 +279,9 @@ extension CGSize { subscript(axis: Axis) -> CGFloat { axis == .horizontal ? widt
         // stacks and other containers splice group children with container-relative frames
         let base = n.transparent ? offset : CGPoint(x: abs.minX, y: abs.minY)
         for c in n.children { extendIntoSafeArea(c, offset: base, safe: safe, bounds: bounds) }
+        // .background { … .ignoresSafeArea() }: the background is not among the children, and it goes under the
+        // bars when the view it backs touches the safe area (a full-screen cover's CanvasBackground)
+        if let b = (n as? _BackgroundNode)?.background { extendIntoSafeArea(b, offset: base, safe: safe, bounds: bounds) }
     }
 
     /// Right to left: SwiftUI lays out in the leading-to-trailing direction, so in a right-to-left environment each
@@ -485,8 +496,26 @@ extension UIView {
         self.path = path; self.children = children
         if children.count == 1 { rowAction = children[0].rowAction }
     }
+    /// The node's size for a proposal. A layout pass asks the same node the same question many times (a stack sizes
+    /// its children to share space, then again to place them, at every level), which is exponential in the depth of
+    /// the tree without this: the answers of one pass are kept. Subclasses compute theirs in `_measure`.
+    final func sizeThatFits(_ p: _Proposal) -> CGSize {
+        guard _Node.sizeCaching else { return _measure(p) }
+        if sizeEpoch != _Node.layoutEpoch { sizeEpoch = _Node.layoutEpoch; sizeCache.removeAll(keepingCapacity: true) }
+        let key = _SizeKey(w: p.width ?? -1, h: p.height ?? -1)
+        if let s = sizeCache[key] { return s }
+        let s = _measure(p)
+        sizeCache[key] = s
+        return s
+    }
+    struct _SizeKey: Hashable { let w: CGFloat, h: CGFloat }
+    private var sizeCache: [_SizeKey: CGSize] = [:]
+    private var sizeEpoch = -1
+    /// A new pass (a render, a measure, a placement from UIKit): sizes are asked again.
+    static var layoutEpoch = 0
+    static let sizeCaching = ProcessInfo.processInfo.environment["ISIM_SWIFTUI_SIZE_CACHE"] != "0"
     /// Default: a container sized like its (single) content; children overlap.
-    func sizeThatFits(_ p: _Proposal) -> CGSize {
+    func _measure(_ p: _Proposal) -> CGSize {
         var s = CGSize.zero
         for c in children { let cs = c.sizeThatFits(p); s.width = max(s.width, cs.width); s.height = max(s.height, cs.height) }
         return s
@@ -522,7 +551,7 @@ final class _PassthroughView: UIView {
 /// Stacks splice their children in; elsewhere they lay out like a VStack.
 final class _GroupNode: _Node {
     override var transparent: Bool { true }
-    override func sizeThatFits(_ p: _Proposal) -> CGSize { _stackSize(children, axis: .vertical, spacing: 8, p) }
+    override func _measure(_ p: _Proposal) -> CGSize { _stackSize(children, axis: .vertical, spacing: 8, p) }
     override func place(_ rect: CGRect) {
         frame = rect
         _stackPlace(children, axis: .vertical, spacing: 8, alignment: .center, in: CGRect(origin: rect.origin, size: rect.size), relative: false)
@@ -550,10 +579,10 @@ final class _GroupNode: _Node {
 
 // MARK: - Stack layout (proposal-based, flexibility-ordered like SwiftUI)
 
-@MainActor func _stackSizes(_ nodes: [_Node], axis: Axis, spacing: CGFloat, _ p: _Proposal) -> [CGSize] {
+@MainActor func _stackSizes(_ nodes: [_Node], axis: Axis, spacing: CGFloat, _ p: _Proposal, adaptive: Bool = false) -> [CGSize] {
     let n = nodes.count
     if n == 0 { return [] }
-    let gaps = spacing * CGFloat(n - 1)
+    let gaps = _stackGaps(nodes, spacing: spacing, adaptive: adaptive).reduce(0, +)
     // spacers take space only along the stack axis
     func spacerSize(_ s: _SpacerNode, _ main: CGFloat?) -> CGSize {
         let m = max(s.minLength, main ?? s.minLength)
@@ -594,19 +623,35 @@ final class _GroupNode: _Node {
     }
     return sizes
 }
-@MainActor func _stackSize(_ children: [_Node], axis: Axis, spacing: CGFloat, _ p: _Proposal, alignment: Alignment? = nil) -> CGSize {
+/// The gaps between a stack's children: `spacing`, except next to a Spacer when the stack has SwiftUI's default
+/// spacing (adaptive), where SwiftUI puts none (`HStack { dot; Spacer(minLength: 0); dot }` spreads the dots)
+@MainActor func _stackGaps(_ nodes: [_Node], spacing: CGFloat, adaptive: Bool) -> [CGFloat] {
+    guard nodes.count > 1 else { return [] }
+    return (0..<(nodes.count - 1)).map { i in adaptive && (nodes[i].isSpacer || nodes[i + 1].isSpacer) ? 0 : spacing }
+}
+@MainActor func _stackSize(_ children: [_Node], axis: Axis, spacing: CGFloat, _ p: _Proposal, alignment: Alignment? = nil, adaptive: Bool = false) -> CGSize {
     let nodes = _flatten(children)
-    let sizes = _stackSizes(nodes, axis: axis, spacing: spacing, p)
-    let main = sizes.reduce(0) { $0 + $1[axis] } + spacing * CGFloat(max(0, nodes.count - 1))
+    let sizes = _stackSizes(nodes, axis: axis, spacing: spacing, p, adaptive: adaptive)
+    let main = sizes.reduce(0) { $0 + $1[axis] } + _stackGaps(nodes, spacing: spacing, adaptive: adaptive).reduce(0, +)
     var cross = sizes.map { $0[axis == .vertical ? .horizontal : .vertical] }.max() ?? 0
     // alignment guides (CustomLayout.swift) can widen the stack across its axis
     if let a = alignment, let g = _guidedAxis(nodes, sizes, horizontal: axis == .vertical, axis == .vertical ? a.horizontal.id : a.vertical.id) { cross = g.extent }
     return axis == .vertical ? CGSize(width: cross, height: main) : CGSize(width: main, height: cross)
 }
 /// Places children inside `rect`; with relative = true frames are relative to rect's origin.
-@MainActor func _stackPlace(_ children: [_Node], axis: Axis, spacing: CGFloat, alignment: Alignment, in rect: CGRect, relative: Bool) {
+@MainActor func _stackPlace(_ children: [_Node], axis: Axis, spacing: CGFloat, alignment: Alignment, in rect: CGRect, relative: Bool, adaptive: Bool = false) {
     let nodes = _flatten(children)
-    let sizes = _stackSizes(nodes, axis: axis, spacing: spacing, _Proposal(width: rect.width, height: rect.height))
+    let gaps = _stackGaps(nodes, spacing: spacing, adaptive: adaptive)
+    // SwiftUI places a stack with the proposal it was measured with: in a ScrollView a VStack is proposed no height,
+    // measured and placed so. Given exactly its unbounded size along its axis, the children keep the sizes they were
+    // measured at; offered as a finite length again, the most flexible ones (maxHeight: .infinity) would take the
+    // space of the others (aspect-ratio tiles shrunk to a dot)
+    let free = axis == .vertical ? _Proposal(width: rect.width, height: nil) : _Proposal(width: nil, height: rect.height)
+    var sizes = _stackSizes(nodes, axis: axis, spacing: spacing, free, adaptive: adaptive)
+    let freeMain = sizes.reduce(0) { $0 + $1[axis] } + gaps.reduce(0, +)
+    if abs(freeMain - (axis == .vertical ? rect.height : rect.width)) > 0.5 {
+        sizes = _stackSizes(nodes, axis: axis, spacing: spacing, _Proposal(width: rect.width, height: rect.height), adaptive: adaptive)
+    }
     var pos: CGFloat = 0
     let base = relative ? CGPoint.zero : rect.origin
     let guided = _guidedAxis(nodes, sizes, horizontal: axis == .vertical, axis == .vertical ? alignment.horizontal.id : alignment.vertical.id)
@@ -626,24 +671,27 @@ final class _GroupNode: _Node {
             f = CGRect(x: base.x + pos, y: base.y + y, width: s.width, height: s.height)
         }
         node.place(f)
-        pos += s[axis] + spacing
+        pos += s[axis] + (i < gaps.count ? gaps[i] : 0)
     }
 }
 
 final class _StackNode: _Node {
     let axis: Axis, spacing: CGFloat, alignment: Alignment
+    /// SwiftUI's default spacing (no spacing given): none next to a Spacer
+    let adaptive: Bool
     var pinned: PinnedScrollableViews = []          // LazyVStack / LazyHStack (Lazy+Pinned.swift)
     var lazy = false
     init(path: String, axis: Axis, spacing: CGFloat?, alignment: Alignment, children: [_Node]) {
         self.axis = axis; self.alignment = alignment
+        self.adaptive = spacing == nil
         self.spacing = spacing ?? 8
         super.init(path: path, children: children)
         rowAction = nil
     }
-    override func sizeThatFits(_ p: _Proposal) -> CGSize { _stackSize(children, axis: axis, spacing: spacing, p, alignment: alignment) }
+    override func _measure(_ p: _Proposal) -> CGSize { _stackSize(children, axis: axis, spacing: spacing, p, alignment: alignment, adaptive: adaptive) }
     override func place(_ rect: CGRect) {
         frame = rect
-        _stackPlace(children, axis: axis, spacing: spacing, alignment: alignment, in: rect, relative: true)
+        _stackPlace(children, axis: axis, spacing: spacing, alignment: alignment, in: rect, relative: true, adaptive: adaptive)
     }
     override func mountChildren(_ g: _Graph, in view: UIView) {
         for (i, c) in _flatten(children).enumerated() { g.mount(c, in: view, order: i) }
@@ -654,7 +702,7 @@ final class _StackNode: _Node {
 final class _ZStackNode: _Node {
     let alignment: Alignment
     init(path: String, alignment: Alignment, children: [_Node]) { self.alignment = alignment; super.init(path: path, children: children); rowAction = nil }
-    override func sizeThatFits(_ p: _Proposal) -> CGSize {
+    override func _measure(_ p: _Proposal) -> CGSize {
         var s = CGSize.zero
         let nodes = _flatten(children)
         let sizes = nodes.map { $0.sizeThatFits(p) }
@@ -694,9 +742,16 @@ final class _SpacerNode: _Node {
     let minLength: CGFloat
     init(path: String, minLength: CGFloat?) { self.minLength = minLength ?? 8; super.init(path: path, children: []) }
     override var isSpacer: Bool { true }
-    override func sizeThatFits(_ p: _Proposal) -> CGSize {
+    /// the enclosing stack's axis (EnvironmentValues._stackAxis): the spacer grows along it only
+    var axis: Axis?
+    override func _measure(_ p: _Proposal) -> CGSize {
         // the enclosing stack proposes the space along its axis; take it (at least minLength)
-        CGSize(width: max(minLength, min(p.width ?? minLength, 1e6)) , height: max(minLength, min(p.height ?? minLength, 1e6)))
+        let w = max(minLength, min(p.width ?? minLength, 1e6)), h = max(minLength, min(p.height ?? minLength, 1e6))
+        switch axis {
+        case .horizontal?: return CGSize(width: w, height: 0)
+        case .vertical?: return CGSize(width: 0, height: h)
+        case nil: return CGSize(width: w, height: h)
+        }
     }
 }
 
@@ -712,7 +767,7 @@ class _WrapperNode: _Node {
 final class _PaddingNode: _WrapperNode {
     let insets: EdgeInsets
     init(path: String, insets: EdgeInsets, child: _Node) { self.insets = insets; super.init(path: path, child: child) }
-    override func sizeThatFits(_ p: _Proposal) -> CGSize {
+    override func _measure(_ p: _Proposal) -> CGSize {
         let s = child.sizeThatFits(p.inset(insets))
         return CGSize(width: s.width + insets.leading + insets.trailing, height: s.height + insets.top + insets.bottom)
     }
@@ -726,7 +781,7 @@ final class _FrameNode: _WrapperNode {
     var width: CGFloat?, height: CGFloat?
     var minWidth: CGFloat?, maxWidth: CGFloat?, minHeight: CGFloat?, maxHeight: CGFloat?
     var alignment: Alignment = .center
-    override func sizeThatFits(_ p: _Proposal) -> CGSize {
+    override func _measure(_ p: _Proposal) -> CGSize {
         var proposal = p
         if let w = width { proposal.width = w } else if let pw = p.width { proposal.width = min(max(pw, minWidth ?? 0), maxWidth ?? .infinity) }
         if let h = height { proposal.height = h } else if let ph = p.height { proposal.height = min(max(ph, minHeight ?? 0), maxHeight ?? .infinity) }
@@ -758,7 +813,7 @@ final class _BackgroundNode: _WrapperNode {
         self.color = color; self.cornerRadius = cornerRadius; self.background = background
         super.init(path: path, child: child)
     }
-    override func sizeThatFits(_ p: _Proposal) -> CGSize { child.sizeThatFits(p) }
+    override func _measure(_ p: _Proposal) -> CGSize { child.sizeThatFits(p) }
     override func place(_ rect: CGRect) {
         frame = rect
         background?.place(CGRect(origin: .zero, size: rect.size))
@@ -782,7 +837,7 @@ final class _ViewPropsNode: _WrapperNode {
     var alpha: CGFloat = 1
     var hidden = false
     var disabled = false
-    override func sizeThatFits(_ p: _Proposal) -> CGSize { child.sizeThatFits(p) }
+    override func _measure(_ p: _Proposal) -> CGSize { child.sizeThatFits(p) }
     override func place(_ rect: CGRect) { frame = rect; child.place(CGRect(origin: .zero, size: rect.size)) }
     override func mountView(_ g: _Graph) -> UIView {
         let v = g.view(viewKey) { _PassthroughView() }
@@ -796,7 +851,7 @@ final class _ViewPropsNode: _WrapperNode {
 final class _ColorNode: _Node {
     let color: Color
     init(path: String, color: Color) { self.color = color; super.init(path: path, children: []) }
-    override func sizeThatFits(_ p: _Proposal) -> CGSize { CGSize(width: p.width ?? 10, height: p.height ?? 10) }
+    override func _measure(_ p: _Proposal) -> CGSize { CGSize(width: p.width ?? 10, height: p.height ?? 10) }
     override func mountView(_ g: _Graph) -> UIView {
         let v = g.view(viewKey) { UIView() }
         v.backgroundColor = color.uiColor
@@ -806,7 +861,7 @@ final class _ColorNode: _Node {
 }
 
 final class _DividerNode: _Node {
-    override func sizeThatFits(_ p: _Proposal) -> CGSize { CGSize(width: p.width ?? 10, height: 1 / max(1, UIScreen.main.scale)) }
+    override func _measure(_ p: _Proposal) -> CGSize { CGSize(width: p.width ?? 10, height: 1 / max(1, UIScreen.main.scale)) }
     override func mountView(_ g: _Graph) -> UIView {
         let v = g.view(viewKey) { UIView() }
         v.backgroundColor = .separator

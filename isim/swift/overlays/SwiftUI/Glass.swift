@@ -132,7 +132,7 @@ final class _GlassNode: _Node {
     let background: _GlassBackground
     var unionKey: String?, morphID: String?, transition = 0
     init(path: String, background: _GlassBackground) { self.background = background; super.init(path: path, children: []) }
-    override func sizeThatFits(_ p: _Proposal) -> CGSize { CGSize(width: p.width ?? 10, height: p.height ?? 10) }
+    override func _measure(_ p: _Proposal) -> CGSize { CGSize(width: p.width ?? 10, height: p.height ?? 10) }
     override func mountView(_ g: _Graph) -> UIView {
         let v = g.view(viewKey) { _SUIGlassView(frame: .zero) }
         v.radius = background.kindRadius(frame.size); v.glassTint = background.tint; v.clear = background.clear
@@ -277,7 +277,7 @@ final class _GlassContainerNode: _WrapperNode {
     let spacing: CGFloat
     init(path: String, spacing: CGFloat, child: _Node) { self.spacing = spacing; super.init(path: path, child: child) }
     override var layoutPriority: Double { child.layoutPriority }
-    override func sizeThatFits(_ p: _Proposal) -> CGSize { child.sizeThatFits(p) }
+    override func _measure(_ p: _Proposal) -> CGSize { child.sizeThatFits(p) }
     override func place(_ rect: CGRect) { frame = rect; child.place(CGRect(origin: .zero, size: rect.size)) }
     override func mountView(_ g: _Graph) -> UIView {
         let v = g.view(viewKey) { _SUIGlassContainerView(frame: .zero) }
@@ -565,7 +565,7 @@ extension NavigationTransition where Self == CrossFadeNavigationTransition { pub
 /// backgroundExtensionEffect: blurred mirror images of the view in the safe-area gaps between it and the screen edges.
 final class _BackgroundExtensionNode: _WrapperNode {
     override var layoutPriority: Double { child.layoutPriority }
-    override func sizeThatFits(_ p: _Proposal) -> CGSize { child.sizeThatFits(p) }
+    override func _measure(_ p: _Proposal) -> CGSize { child.sizeThatFits(p) }
     override func place(_ rect: CGRect) { frame = rect; child.place(CGRect(origin: .zero, size: rect.size)) }
     override func mountView(_ g: _Graph) -> UIView {
         let v = g.view(viewKey) { _SUIBackgroundExtensionView(frame: .zero) }

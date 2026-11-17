@@ -44,7 +44,7 @@ struct _EdgeFadeBackground: View, _PrimitiveView {
 final class _EdgeFadeNode: _Node {
     let fromBottom: Bool
     init(path: String, fromBottom: Bool) { self.fromBottom = fromBottom; super.init(path: path, children: []) }
-    override func sizeThatFits(_ p: _Proposal) -> CGSize { CGSize(width: p.width ?? 0, height: p.height ?? 0) }
+    override func _measure(_ p: _Proposal) -> CGSize { CGSize(width: p.width ?? 0, height: p.height ?? 0) }
     override func mountView(_ g: _Graph) -> UIView {
         let v = g.view(viewKey) { _SUIEdgeFadeView(frame: .zero) }
         v.accessibilityIdentifier = "safe-area-bar-fade"

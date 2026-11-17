@@ -168,7 +168,7 @@ final class _SplitNode: _Node {
         super.init(path: path, children: columns.map(\.node))
     }
     override var ignoresSafeArea: Bool { true }
-    override func sizeThatFits(_ p: _Proposal) -> CGSize { CGSize(width: min(p.width ?? 700, 1e6), height: min(p.height ?? 700, 1e6)) }
+    override func _measure(_ p: _Proposal) -> CGSize { CGSize(width: min(p.width ?? 700, 1e6), height: min(p.height ?? 700, 1e6)) }
     override func place(_ rect: CGRect) {
         frame = rect
         frames = []
@@ -214,7 +214,7 @@ final class _TabBarVisibilityNode: _WrapperNode {
     init(path: String, hidden: Bool, child: _Node) { self.hidden = hidden; super.init(path: path, child: child) }
     override var layoutPriority: Double { child.layoutPriority }
     override var ignoresSafeArea: Bool { child.ignoresSafeArea }
-    override func sizeThatFits(_ p: _Proposal) -> CGSize { child.sizeThatFits(p) }
+    override func _measure(_ p: _Proposal) -> CGSize { child.sizeThatFits(p) }
     override func place(_ rect: CGRect) { frame = rect; child.place(CGRect(origin: .zero, size: rect.size)) }
 }
 @MainActor func _tabBarHidden(_ n: _Node) -> Bool {
@@ -435,7 +435,7 @@ final class _SheetGrabberNode: _Node {
     init(path: String, changed: @escaping (CGFloat) -> Void, ended: @escaping (CGFloat) -> Void) {
         self.changed = changed; self.ended = ended; super.init(path: path, children: [])
     }
-    override func sizeThatFits(_ p: _Proposal) -> CGSize { CGSize(width: min(p.width ?? 10, 1e6), height: min(p.height ?? 10, 1e6)) }
+    override func _measure(_ p: _Proposal) -> CGSize { CGSize(width: min(p.width ?? 10, 1e6), height: min(p.height ?? 10, 1e6)) }
     override func mountView(_ g: _Graph) -> UIView {
         let v = g.view(viewKey) { _SUISheetGrabber(frame: .zero) }
         v.changed = changed; v.ended = ended

@@ -269,7 +269,7 @@ final class _PencilNode: _WrapperNode {
     var tap: ((NSObject?, UIView) -> Void)?
     var squeeze: ((Int, NSObject?, UIView) -> Void)?
     override var layoutPriority: Double { child.layoutPriority }
-    override func sizeThatFits(_ p: _Proposal) -> CGSize { child.sizeThatFits(p) }
+    override func _measure(_ p: _Proposal) -> CGSize { child.sizeThatFits(p) }
     override func place(_ rect: CGRect) { frame = rect; child.place(CGRect(origin: .zero, size: rect.size)) }
     override func mountView(_ g: _Graph) -> UIView {
         let v = g.view(viewKey) { _SUIPencilView(frame: .zero) }

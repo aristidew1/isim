@@ -44,7 +44,23 @@ struct _PresentedContent<Content: View>: View, _PrimitiveView {
         env.dismiss = DismissAction(action: dismiss)
         env.isPresented = true
         env.colorScheme = ctx.environment.colorScheme
-        return _resolve(content, _Context(graph: ctx.graph, path: ctx.path, environment: env, nav: nil))
+        let node = _resolve(content, _Context(graph: ctx.graph, path: ctx.path, environment: env, nav: nil))
+        // a UIKit page sheet (only .large, not isim's own detent card): presentationBackground, presentationDragIndicator
+        // and presentationCornerRadius, read by the content just resolved, go to its controller
+        if let cfg = environment._sheetConfig, !cfg.custom {
+            let g = ctx.graph
+            g.postRender.append { [weak g] in
+                var r: UIResponder? = g?.hostView
+                while let x = r, !(x is UIViewController) { r = x.next }
+                guard let vc = r as? UIViewController else { return }
+                if let bg = cfg.background { vc.view.backgroundColor = bg.uiColor; g?.hostView?.backgroundColor = bg.uiColor }
+                if let sheet = vc.sheetPresentationController {
+                    sheet.prefersGrabberVisible = cfg.indicator == .visible
+                    if let radius = cfg.cornerRadius { sheet.preferredCornerRadius = radius }
+                }
+            }
+        }
+        return node
     }
 }
 
@@ -118,7 +134,14 @@ extension View {
                         // presenter state changed: refresh the content
                         hc.rootView = state.sheetConfig.custom ? AnyView(_DetentSheet(config: state.sheetConfig, content: { wrapped() }, dismiss: { setPresented(false) })) : wrapped()
                     } else {
-                        if let old = state.controller { old.dismiss(animated: false, completion: nil) }
+                        // another item (id) in the same presentation: the old one goes without reporting a dismissal,
+                        // which would set the binding to nil under the new item (a router's stack emptied while its
+                        // screen shows: nothing could close it any more)
+                        if let old = state.controller {
+                            (old as? _SUIPresentedHostingController)?.onUIKitDismiss = nil
+                            state.controller = nil
+                            old.dismiss(animated: false, completion: nil)
+                        }
                         let hc = _SUIPresentedHostingController(rootView: wrapped())
                         hc.modalPresentationStyle = fullScreen ? .fullScreen : .pageSheet
                         state.transition.kind = .push
@@ -198,6 +221,22 @@ extension View {
     @_disfavoredOverload public func confirmationDialog<S: StringProtocol, A: View, M: View>(_ title: S, isPresented: Binding<Bool>, titleVisibility: Visibility = .automatic,
                                                      @ViewBuilder actions: () -> A, @ViewBuilder message: () -> M) -> some View {
         _alert(titleVisibility == .visible ? Text(title) : nil, isPresented: isPresented, style: .actionSheet, actions: actions(), message: message())
+    }
+    public func confirmationDialog<A: View, T>(_ titleKey: LocalizedStringKey, isPresented: Binding<Bool>, titleVisibility: Visibility = .automatic,
+                                               presenting data: T?, @ViewBuilder actions: (T) -> A) -> some View {
+        _alert(titleVisibility == .visible ? Text(titleKey) : nil, isPresented: isPresented, style: .actionSheet, actions: data.map(actions), message: nil as EmptyView?)
+    }
+    @_disfavoredOverload public func confirmationDialog<S: StringProtocol, A: View, T>(_ title: S, isPresented: Binding<Bool>, titleVisibility: Visibility = .automatic,
+                                               presenting data: T?, @ViewBuilder actions: (T) -> A) -> some View {
+        _alert(titleVisibility == .visible ? Text(title) : nil, isPresented: isPresented, style: .actionSheet, actions: data.map(actions), message: nil as EmptyView?)
+    }
+    public func confirmationDialog<A: View, M: View, T>(_ titleKey: LocalizedStringKey, isPresented: Binding<Bool>, titleVisibility: Visibility = .automatic,
+                                               presenting data: T?, @ViewBuilder actions: (T) -> A, @ViewBuilder message: (T) -> M) -> some View {
+        _alert(titleVisibility == .visible ? Text(titleKey) : nil, isPresented: isPresented, style: .actionSheet, actions: data.map(actions), message: data.map(message))
+    }
+    @_disfavoredOverload public func confirmationDialog<S: StringProtocol, A: View, M: View, T>(_ title: S, isPresented: Binding<Bool>, titleVisibility: Visibility = .automatic,
+                                               presenting data: T?, @ViewBuilder actions: (T) -> A, @ViewBuilder message: (T) -> M) -> some View {
+        _alert(titleVisibility == .visible ? Text(title) : nil, isPresented: isPresented, style: .actionSheet, actions: data.map(actions), message: data.map(message))
     }
 
     func _alert<A: View, M: View>(_ title: Text?, isPresented: Binding<Bool>, style: UIAlertController.Style, actions: A?, message: M?) -> some View {

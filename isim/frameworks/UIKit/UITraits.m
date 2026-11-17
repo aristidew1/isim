@@ -416,7 +416,9 @@ void isim_ui_traits_flush(void) {
         NSMutableArray *r = [NSMutableArray array];
         for (UIView *v in dirty_roots) {
             BOOL covered = NO;
-            for (UIView *o in dirty_roots) if (o != v && [v isDescendantOfView:o]) { covered = YES; break; }
+            /* an ancestor that is dirty too covers it: walk up (a first render makes thousands of views dirty, and
+               comparing each with every other one was quadratic) */
+            for (UIView *p = v.superview; p; p = p.superview) if ([dirty_roots containsObject:p]) { covered = YES; break; }
             if (!covered) [r addObject:v];
         }
         roots = r;

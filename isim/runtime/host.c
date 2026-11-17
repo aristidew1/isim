@@ -25,6 +25,7 @@
 #include <SDL3/SDL.h>
 #include <cairo.h>
 #include <pango/pangocairo.h>
+#include <gdk-pixbuf/gdk-pixbuf.h>
 #include <pango/pangofc-fontmap.h>
 #include <fontconfig/fontconfig.h>
 #include <fontconfig/fcfreetype.h>
@@ -1043,13 +1044,16 @@ static PangoLayout *layout_for_family(const char *utf8, const char *family, doub
     int mono = style & 1;
     PangoLayout *l = pango_layout_new(pctx);
     PangoFontDescription *fd = pango_font_description_new();
-    char fam[512];
-    if (family && *family) snprintf(fam, sizeof fam, "%s,%s", family, mono ? SYSTEM_MONO : SYSTEM_SANS);
+    char fam[512], vars[256] = "";
+    const char *at = family ? strchr(family, '@') : NULL;    /* "Archivo@wdth=64,wght=800": a variable font's axes */
+    if (at) { snprintf(vars, sizeof vars, "%s", at + 1); snprintf(fam, sizeof fam, "%.*s,%s", (int)(at - family), family, mono ? SYSTEM_MONO : SYSTEM_SANS); }
+    else if (family && *family) snprintf(fam, sizeof fam, "%s,%s", family, mono ? SYSTEM_MONO : SYSTEM_SANS);
     else snprintf(fam, sizeof fam, "%s", mono ? SYSTEM_MONO : SYSTEM_SANS);
     pango_font_description_set_family(fd, fam);
     pango_font_description_set_absolute_size(fd, size * PANGO_SCALE);
     pango_font_description_set_weight(fd, pango_weight(weight));
     if (style & 2) pango_font_description_set_style(fd, PANGO_STYLE_ITALIC);
+    if (vars[0]) pango_font_description_set_variations(fd, vars);
     pango_layout_set_font_description(l, fd);
     if (style & 4) {
         PangoAttrList *al = pango_attr_list_new();
@@ -1073,12 +1077,24 @@ static void measure_context(void) {
     if (!pctx) text_context(mcr);                  /* a process without an app surface (a test binary) */
     pango_cairo_update_context(mcr, pctx);
 }
+/* measured sizes, by text, font, width, line limit and pixel scale: SwiftUI measures the same labels many times in a
+   layout pass (and again in the next one), and each measure is a full Pango layout. Registering a font clears it. */
+static GHashTable *measure_cache;
+static void measure_cache_clear(void) { if (measure_cache) g_hash_table_remove_all(measure_cache); }
 ISIM_GUEST_ABI void isim_text_measure_f(const char *utf8, const char *family, double size, double weight, int mono, double maxw, int lines, double *w, double *h) {
+    if (!measure_cache) measure_cache = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, g_free);
+    char *key = g_strdup_printf("%s\x1f%.4f\x1f%.4f\x1f%d\x1f%.4f\x1f%d\x1f%.3f\x1f%s", family ? family : "", size, weight, mono, maxw, lines,
+                                px_scale, utf8 ? utf8 : "");
+    double *hit = g_hash_table_lookup(measure_cache, key);
+    if (hit) { *w = hit[0]; *h = hit[1]; g_free(key); return; }
     measure_context();
     PangoLayout *l = layout_for_family(utf8, family, size, weight, mono, maxw, lines, 0);
     PangoRectangle log; pango_layout_get_extents(l, NULL, &log);
     *w = ceil((double)log.width / PANGO_SCALE); *h = ceil((double)log.height / PANGO_SCALE);
     g_object_unref(l);
+    if (g_hash_table_size(measure_cache) > 50000) g_hash_table_remove_all(measure_cache);
+    double *v = g_new(double, 2); v[0] = *w; v[1] = *h;
+    g_hash_table_insert(measure_cache, key, v);
 }
 ISIM_GUEST_ABI void isim_text_end_point_f(const char *utf8, const char *family, double size, double weight, int mono, double maxw, double *x, double *y) {
     measure_context();
@@ -1128,6 +1144,7 @@ ISIM_GUEST_ABI int isim_font_register(const char *path) { return isim_font_regis
  * data that were not registered) */
 ISIM_GUEST_ABI int isim_font_register_listed(const char *path, int listed) {
     if (!FcConfigAppFontAddFile(FcConfigGetCurrent(), (const FcChar8 *)path)) return 0;
+    measure_cache_clear();
     int count = 0;                                     /* the file's faces, for UIFont.familyNames / fontNames(forFamilyName:) */
     for (int face = 0; listed && napp_faces < 128; face++) {
         FcPattern *p = FcFreeTypeQuery((const FcChar8 *)path, face, NULL, &count);
@@ -1538,9 +1555,26 @@ static void screenshot(const char *path) {
     cairo_surface_flush(surf);
     char tmp[1100];                       /* whole or not at all: a reader polling for the file never sees half of it */
     snprintf(tmp, sizeof tmp, "%s.tmp%d", path, (int)getpid());
-    cairo_status_t st = cairo_surface_write_to_png(surf, tmp);
-    if (st == CAIRO_STATUS_SUCCESS) rename(tmp, path); else unlink(tmp);
-    fprintf(stderr, "isim host: screenshot %s (%dx%d px): %s\n", path, surf_w, surf_h, cairo_status_to_string(st));
+    /* zlib level 1: cairo's PNG writer compresses at the default level, a third of a frame's time for a client that
+       streams screenshots (a remote viewer polling `shot`); the file is ~20 % larger */
+    int w = cairo_image_surface_get_width(surf), h = cairo_image_surface_get_height(surf), stride = cairo_image_surface_get_stride(surf);
+    const uint8_t *src = cairo_image_surface_get_data(surf);
+    uint8_t *rgba = malloc((size_t)w * h * 4);
+    for (int y = 0; y < h; y++) {
+        const uint32_t *row = (const uint32_t *)(src + (size_t)y * stride); uint8_t *o = rgba + (size_t)y * w * 4;
+        for (int x = 0; x < w; x++, o += 4) {
+            uint32_t p = row[x]; unsigned a = p >> 24, r = (p >> 16) & 255, g = (p >> 8) & 255, b = p & 255;
+            if (a && a < 255) { r = r * 255 / a; g = g * 255 / a; b = b * 255 / a; }     /* cairo's pixels are premultiplied */
+            o[0] = r; o[1] = g; o[2] = b; o[3] = a;
+        }
+    }
+    GdkPixbuf *pb = gdk_pixbuf_new_from_data(rgba, GDK_COLORSPACE_RGB, TRUE, 8, w, h, w * 4, NULL, NULL);
+    GError *err = NULL;
+    int ok = gdk_pixbuf_save(pb, tmp, "png", &err, "compression", "1", NULL);
+    g_object_unref(pb); free(rgba);
+    if (ok) rename(tmp, path); else unlink(tmp);
+    fprintf(stderr, "isim host: screenshot %s (%dx%d px): %s\n", path, surf_w, surf_h, ok ? "no error has occurred" : err ? err->message : "error");
+    if (err) g_error_free(err);
 }
 
 /* ---------------- events ---------------- */

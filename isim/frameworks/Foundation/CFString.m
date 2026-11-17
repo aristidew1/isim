@@ -50,6 +50,28 @@ Boolean CFStringGetCString(CFStringRef s, char *buf, CFIndex size, CFStringEncod
     buf[d.length] = 0;
     return true;
 }
+/* The characters of `r` in encoding `e`: as many whole characters as fit in `buf` (all of them, counted only, when
+   `buf` is NULL); returns how many characters were converted. */
+CFIndex CFStringGetBytes(CFStringRef s, CFRange r, CFStringEncoding e, UInt8 lossByte, Boolean isExternalRepresentation, UInt8 *buf,
+                         CFIndex maxBufLen, CFIndex *usedBufLen) {
+    if (usedBufLen) *usedBufLen = 0;
+    NSStringEncoding ns = CFStringConvertEncodingToNSStringEncoding(e);
+    if (!s || !ns || r.length <= 0) return 0;
+    NSString *str = (__bridge NSString *)s;
+    NSStringEncodingConversionOptions o = (lossByte ? NSStringEncodingConversionAllowLossy : 0) |
+                                          (isExternalRepresentation ? NSStringEncodingConversionExternalRepresentation : 0);
+    NSUInteger used = 0;
+    NSRange left = NSMakeRange(0, 0);
+    if (![str getBytes:buf maxLength:buf ? (NSUInteger)maxBufLen : NSUIntegerMax usedLength:&used encoding:ns options:o
+                 range:NSMakeRange((NSUInteger)r.location, (NSUInteger)r.length) remainingRange:&left]) return 0;
+    if (usedBufLen) *usedBufLen = (CFIndex)used;
+    return r.length - (CFIndex)left.length;
+}
+/* NSStrings here keep UTF-16 */
+CFStringEncoding CFStringGetFastestEncoding(CFStringRef s) { (void)s; return kCFStringEncodingUnicode; }
+CFStringEncoding CFStringGetSmallestEncoding(CFStringRef s) {
+    return s && [(__bridge NSString *)s canBeConvertedToEncoding:NSASCIIStringEncoding] ? kCFStringEncodingASCII : kCFStringEncodingUnicode;
+}
 /* Apple returns NULL when the string has no such internal storage; callers then use CFStringGetCString */
 const char *CFStringGetCStringPtr(CFStringRef s, CFStringEncoding e) { (void)s; (void)e; return NULL; }
 CFIndex CFStringGetMaximumSizeForEncoding(CFIndex length, CFStringEncoding e) {

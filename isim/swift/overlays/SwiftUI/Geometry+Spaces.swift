@@ -13,7 +13,7 @@ final class _CoordinateSpaceNode: _WrapperNode {
     init(path: String, name: AnyHashable, child: _Node) { self.name = name; super.init(path: path, child: child) }
     override var layoutPriority: Double { child.layoutPriority }
     override var isSpacer: Bool { child.isSpacer }
-    override func sizeThatFits(_ p: _Proposal) -> CGSize { child.sizeThatFits(p) }
+    override func _measure(_ p: _Proposal) -> CGSize { child.sizeThatFits(p) }
     override func place(_ rect: CGRect) { frame = rect; child.place(CGRect(origin: .zero, size: rect.size)) }
     override func mountView(_ g: _Graph) -> UIView {
         let v = g.view(viewKey) { _SUICoordinateSpaceView(frame: .zero) }

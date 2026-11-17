@@ -360,7 +360,7 @@ extension UIApplication {
 final class _SearchFieldNode: _Node {
     let config: _SearchConfig
     init(path: String, config: _SearchConfig) { self.config = config; super.init(path: path, children: []) }
-    override func sizeThatFits(_ p: _Proposal) -> CGSize { CGSize(width: min(p.width ?? 320, 1e6), height: 36) }
+    override func _measure(_ p: _Proposal) -> CGSize { CGSize(width: min(p.width ?? 320, 1e6), height: 36) }
     override func mountView(_ g: _Graph) -> UIView {
         let v = g.view(viewKey) { _SUISearchBar(frame: .zero) }
         v.configure(config)

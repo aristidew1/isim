@@ -160,7 +160,7 @@ final class _PriorityNode: _WrapperNode {
     let priority: Double
     init(path: String, priority: Double, child: _Node) { self.priority = priority; super.init(path: path, child: child) }
     override var layoutPriority: Double { priority }
-    override func sizeThatFits(_ p: _Proposal) -> CGSize { child.sizeThatFits(p) }
+    override func _measure(_ p: _Proposal) -> CGSize { child.sizeThatFits(p) }
     override func place(_ rect: CGRect) { frame = rect; child.place(CGRect(origin: .zero, size: rect.size)) }
 }
 
@@ -220,8 +220,11 @@ extension View {
             let key = ctx.path + "#appear"
             ctx.graph.usedAppear.insert(key)
             if !ctx.graph.appeared.contains(key) {
-                ctx.graph.appeared.insert(key)
-                if let a = action { ctx.graph.postRender.append(a) }
+                let g = ctx.graph
+                g._lifecycle(ctx.path) {
+                    g.appeared.insert(key)
+                    if let a = action { g.postRender.append(a) }
+                }
             }
             return _resolve(c, ctx.child("l"))
         }
@@ -241,8 +244,10 @@ extension View {
             ctx.graph.usedTasks.insert(key)
             if ctx.graph.tasks[key] == nil {
                 let g = ctx.graph
-                g.postRender.append { g.tasks[key] = Task { @MainActor in await action() } }
-                ctx.graph.tasks[key] = Task {}   // placeholder until started after this render
+                g._lifecycle(ctx.path) {
+                    g.postRender.append { g.tasks[key] = Task { @MainActor in await action() } }
+                    g.tasks[key] = Task {}   // placeholder until started after this render
+                }
             }
             return _resolve(c, ctx.child("l"))
         }
@@ -254,10 +259,12 @@ extension View {
             g.usedTasks.insert(key); g.usedChanges.insert(vkey)
             let old = g.changeValues[vkey] as? T
             if g.tasks[key] == nil || old != value {
-                if !g.measuring { g.tasks[key]?.cancel() }
-                g.changeValues[vkey] = value
-                g.postRender.append { g.tasks[key] = Task { @MainActor in await action() } }
-                g.tasks[key] = Task {}
+                g._lifecycle(ctx.path) {
+                    if !g.measuring { g.tasks[key]?.cancel() }
+                    g.changeValues[vkey] = value
+                    g.postRender.append { g.tasks[key] = Task { @MainActor in await action() } }
+                    g.tasks[key] = Task {}
+                }
             }
             return _resolve(c, ctx.child("l"))
         }
@@ -328,7 +335,7 @@ final class _IgnoreSafeAreaNode: _WrapperNode {
     init(path: String, edges: Edge.Set, child: _Node) { self.edges = edges; super.init(path: path, child: child) }
     override var ignoresSafeArea: Bool { true }
     override var layoutPriority: Double { child.layoutPriority }
-    override func sizeThatFits(_ p: _Proposal) -> CGSize { child.sizeThatFits(p) }
+    override func _measure(_ p: _Proposal) -> CGSize { child.sizeThatFits(p) }
     override func place(_ rect: CGRect) { frame = rect; child.place(CGRect(origin: .zero, size: rect.size)) }
 }
 
@@ -337,7 +344,7 @@ final class _FixedSizeNode: _WrapperNode {
     init(path: String, horizontal: Bool, vertical: Bool, child: _Node) { self.horizontal = horizontal; self.vertical = vertical; super.init(path: path, child: child) }
     override var layoutPriority: Double { child.layoutPriority }
     func proposal(_ p: _Proposal) -> _Proposal { _Proposal(width: horizontal ? nil : p.width, height: vertical ? nil : p.height) }
-    override func sizeThatFits(_ p: _Proposal) -> CGSize { child.sizeThatFits(proposal(p)) }
+    override func _measure(_ p: _Proposal) -> CGSize { child.sizeThatFits(proposal(p)) }
     override func place(_ rect: CGRect) {
         frame = rect
         let s = child.sizeThatFits(proposal(_Proposal(width: rect.width, height: rect.height)))

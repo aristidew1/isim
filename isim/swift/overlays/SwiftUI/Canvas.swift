@@ -37,7 +37,7 @@ final class _CanvasNode: _Node {
         self.renderer = renderer; self.env = env; super.init(path: path, children: symbols)
         rowAction = nil
     }
-    override func sizeThatFits(_ p: _Proposal) -> CGSize { CGSize(width: min(p.width ?? 10, 1e6), height: min(p.height ?? 10, 1e6)) }
+    override func _measure(_ p: _Proposal) -> CGSize { CGSize(width: min(p.width ?? 10, 1e6), height: min(p.height ?? 10, 1e6)) }
     override func place(_ rect: CGRect) {
         frame = rect
         for c in children { c.place(CGRect(origin: .zero, size: c.sizeThatFits(.unspecified))) }
@@ -521,7 +521,8 @@ public struct TimelineView<Schedule: TimelineSchedule, Content: View>: View, _Pr
         if let d = schedule as? _DirectSchedule {
             (current, next) = d._entry(at: now, start: box.start)
             cadence = d._animated ? .live : schedule is EveryMinuteTimelineSchedule ? .minutes : .seconds
-            if d._animated { _FrameTicker.request(g); next = nil }
+            // every frame; with ISIM_ANIMATIONS=0 (tests, remote viewers) the content is drawn once, like a paused schedule
+            if d._animated { if !_animationsOff { _FrameTicker.request(g) }; next = nil }
         } else {
             var n = 0
             current = box.start

@@ -80,7 +80,7 @@ final class _AttributedEditorNode: _Node {
     init(path: String, text: Binding<AttributedString>, selection: _AnySelection?) {
         self.text = text; self.selection = selection; super.init(path: path, children: [])
     }
-    override func sizeThatFits(_ p: _Proposal) -> CGSize { CGSize(width: p.width ?? 300, height: p.height ?? 200) }
+    override func _measure(_ p: _Proposal) -> CGSize { CGSize(width: p.width ?? 300, height: p.height ?? 200) }
     override func mountView(_ g: _Graph) -> UIView {
         let v = g.view(viewKey) { _SUIAttributedTextView(frame: .zero, textContainer: nil) }
         v.node = self

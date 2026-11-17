@@ -197,7 +197,7 @@ final class _PathNode: _Node {
     /// ops that depend on where the view is (ContainerRelativeShape): computed once it is in place
     var relative: (@MainActor (UIView, CGRect) -> [_DrawOp]?)?
     init(path: String, ops: @escaping (CGRect) -> [_DrawOp]) { self.ops = ops; super.init(path: path, children: []) }
-    override func sizeThatFits(_ p: _Proposal) -> CGSize { CGSize(width: p.width ?? 10, height: p.height ?? 10) }
+    override func _measure(_ p: _Proposal) -> CGSize { CGSize(width: p.width ?? 10, height: p.height ?? 10) }
     override func mountView(_ g: _Graph) -> UIView {
         let v = g.view(viewKey) { _SUIPathView(frame: .zero) }
         let local = CGRect(origin: .zero, size: frame.size)
@@ -250,12 +250,14 @@ func _draw(_ op: _DrawOp) {
     _hostPath(op.path)
     isim_path_set_fill_rule(op.eoFill ? 1 : 0)
     if let s = op.stroke { _setStrokeStyle(s) }
-    _paintCurrentPath(op.paint, mode: op.stroke == nil ? 0 : 1, lineWidth: op.stroke?.lineWidth ?? 0, alpha: op.alpha, bounds: op.path.boundingRect)
+    _paintCurrentPath(op.paint, mode: op.stroke == nil ? 0 : 1, lineWidth: op.stroke?.lineWidth ?? 0, alpha: op.alpha, bounds: op.path.boundingRect)   // (read only by tiled paints)
     isim_path_begin()
     isim_gfx_restore()
 }
 /// Paints the host's current path: mode 0 fill, 1 stroke, 2 the whole clip area.
-func _paintCurrentPath(_ paint: _Paint, mode: Int, lineWidth: CGFloat, alpha: Double, bounds: CGRect) {
+/// `bounds` is evaluated only by the paints that need it (tiled images): flattening the path of every plain fill to
+/// measure it is most of the cost of a Canvas with thousands of small shapes.
+func _paintCurrentPath(_ paint: _Paint, mode: Int, lineWidth: CGFloat, alpha: Double, bounds boundsOf: @autoclosure () -> CGRect) {
     func stops(_ s: [_Stop]) -> ([Double], [Double]) {
         var locs: [Double] = [], rgba: [Double] = []
         var lastLoc = 0.0
@@ -301,6 +303,7 @@ func _paintCurrentPath(_ paint: _Paint, mode: Int, lineWidth: CGFloat, alpha: Do
         isim_gfx_save()
         if mode == 0 { isim_gfx_clip_path() }
         if alpha < 1 { isim_gfx_push_group() }
+        let bounds = boundsOf()
         let x0 = origin.x + ((bounds.minX - origin.x) / tile.width).rounded(.down) * tile.width
         let y0 = origin.y + ((bounds.minY - origin.y) / tile.height).rounded(.down) * tile.height
         var y = y0, n = 0
@@ -333,7 +336,7 @@ final class _IdealSizeNode: _WrapperNode {
     let width: CGFloat?, height: CGFloat?
     init(path: String, width: CGFloat?, height: CGFloat?, child: _Node) { self.width = width; self.height = height; super.init(path: path, child: child) }
     override var layoutPriority: Double { child.layoutPriority }
-    override func sizeThatFits(_ p: _Proposal) -> CGSize { child.sizeThatFits(_Proposal(width: p.width ?? width, height: p.height ?? height)) }
+    override func _measure(_ p: _Proposal) -> CGSize { child.sizeThatFits(_Proposal(width: p.width ?? width, height: p.height ?? height)) }
     override func place(_ rect: CGRect) { frame = rect; child.place(CGRect(origin: .zero, size: rect.size)) }
 }
 
@@ -343,7 +346,7 @@ final class _PathClipNode: _WrapperNode {
     let shape: AnyShape, eoFill: Bool
     init(path: String, shape: AnyShape, eoFill: Bool, child: _Node) { self.shape = shape; self.eoFill = eoFill; super.init(path: path, child: child) }
     override var layoutPriority: Double { child.layoutPriority }
-    override func sizeThatFits(_ p: _Proposal) -> CGSize { child.sizeThatFits(p) }
+    override func _measure(_ p: _Proposal) -> CGSize { child.sizeThatFits(p) }
     override func place(_ rect: CGRect) { frame = rect; child.place(CGRect(origin: .zero, size: rect.size)) }
     override func mountView(_ g: _Graph) -> UIView {
         let v = g.view(viewKey) { _SUIPathClipView(frame: .zero) }

@@ -56,7 +56,7 @@ final class _AlignmentGuideNode: _WrapperNode {
     }
     override var layoutPriority: Double { child.layoutPriority }
     override var isSpacer: Bool { child.isSpacer }
-    override func sizeThatFits(_ p: _Proposal) -> CGSize { child.sizeThatFits(p) }
+    override func _measure(_ p: _Proposal) -> CGSize { child.sizeThatFits(p) }
     override func place(_ rect: CGRect) { frame = rect; child.place(CGRect(origin: .zero, size: rect.size)) }
 }
 @MainActor func _explicitGuide(_ n: _Node?, _ s: CGSize, horizontal: Bool, _ id: Int) -> CGFloat? {
@@ -143,7 +143,7 @@ extension View {
 final class _PositionNode: _WrapperNode {
     let point: CGPoint
     init(path: String, point: CGPoint, child: _Node) { self.point = point; super.init(path: path, child: child) }
-    override func sizeThatFits(_ p: _Proposal) -> CGSize { CGSize(width: min(p.width ?? 10, 1e6), height: min(p.height ?? 10, 1e6)) }
+    override func _measure(_ p: _Proposal) -> CGSize { CGSize(width: min(p.width ?? 10, 1e6), height: min(p.height ?? 10, 1e6)) }
     override func place(_ rect: CGRect) {
         frame = rect
         let s = child.sizeThatFits(_Proposal(width: rect.width, height: rect.height))
@@ -167,7 +167,7 @@ final class _LayoutValueNode: _WrapperNode {
     let key: ObjectIdentifier, value: Any
     init(path: String, key: ObjectIdentifier, value: Any, child: _Node) { self.key = key; self.value = value; super.init(path: path, child: child) }
     override var layoutPriority: Double { child.layoutPriority }
-    override func sizeThatFits(_ p: _Proposal) -> CGSize { child.sizeThatFits(p) }
+    override func _measure(_ p: _Proposal) -> CGSize { child.sizeThatFits(p) }
     override func place(_ rect: CGRect) { frame = rect; child.place(CGRect(origin: .zero, size: rect.size)) }
 }
 extension View {
@@ -305,7 +305,7 @@ final class _CustomLayoutNode: _Node {
     lazy var subviews = LayoutSubviews(items: children.enumerated().map { LayoutSubview(node: $1, placer: placer, index: $0) }, rtl: isRTL)
     lazy var cache: AnyLayout._AnyCache = layout.makeCache(subviews: subviews)
     init(path: String, layout: AnyLayout, children: [_Node]) { self.layout = layout; super.init(path: path, children: children) }
-    override func sizeThatFits(_ p: _Proposal) -> CGSize {
+    override func _measure(_ p: _Proposal) -> CGSize {
         var c = cache
         return layout.sizeThatFits(proposal: ProposedViewSize(width: p.width, height: p.height), subviews: subviews, cache: &c)
     }
@@ -399,7 +399,7 @@ final class _ContainerRelativeNode: _WrapperNode {
         return _Proposal(width: axes.contains(.horizontal) ? length(c.width, .horizontal) : p.width,
                          height: axes.contains(.vertical) ? length(c.height, .vertical) : p.height)
     }
-    override func sizeThatFits(_ p: _Proposal) -> CGSize {
+    override func _measure(_ p: _Proposal) -> CGSize {
         let t = target(p)
         let s = child.sizeThatFits(t)
         return CGSize(width: axes.contains(.horizontal) ? t.width! : s.width, height: axes.contains(.vertical) ? t.height! : s.height)
@@ -448,7 +448,7 @@ final class _SafeAreaInsetNode: _Node {
     }
     override var ignoresSafeArea: Bool { main.ignoresSafeArea }
     var vertical: Bool { edge == .top || edge == .bottom }
-    override func sizeThatFits(_ p: _Proposal) -> CGSize {
+    override func _measure(_ p: _Proposal) -> CGSize {
         let i = inset.sizeThatFits(vertical ? _Proposal(width: p.width, height: nil) : _Proposal(width: nil, height: p.height))
         let used = (vertical ? i.height : i.width) + spacing
         let m = main.sizeThatFits(vertical ? _Proposal(width: p.width, height: p.height.map { max(0, $0 - used) })
@@ -512,7 +512,7 @@ final class _SafeAreaPaddingNode: _WrapperNode {
     init(path: String, insets: EdgeInsets, child: _Node) { self.insets = insets; super.init(path: path, child: child) }
     override var ignoresSafeArea: Bool { child.ignoresSafeArea }
     var pad: _PaddingNode { _PaddingNode(path: path + "/pad", insets: insets, child: child) }
-    override func sizeThatFits(_ p: _Proposal) -> CGSize { pad.sizeThatFits(p) }
+    override func _measure(_ p: _Proposal) -> CGSize { pad.sizeThatFits(p) }
     override func place(_ rect: CGRect) {
         frame = rect
         let extra = UIEdgeInsets(top: insets.top, left: insets.leading, bottom: insets.bottom, right: insets.trailing)

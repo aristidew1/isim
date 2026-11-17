@@ -103,25 +103,43 @@ ISIM_GUEST_ABI void isim_image_draw_quad(int handle, const double *quad, double 
     cairo_surface_destroy(dst);
 }
 
-/* separable box blur of an A8 buffer */
+/* separable box blur of an A8 buffer (zero outside). The vertical pass walks rows with a running sum per column, so
+   it reads memory in order; the division by the window is a multiplication by its reciprocal. */
 static void blur_a8(uint8_t *px, int w, int h, int stride, int r, int horizontal) {
-    if (r < 1) return;
-    int n = horizontal ? w : h, lines = horizontal ? h : w;
-    uint8_t *tmp = malloc((size_t)n);
+    if (r < 1 || w <= 0 || h <= 0) return;
     long win = 2 * r + 1;
-    for (int l = 0; l < lines; l++) {
-        #define AT(i) (*(horizontal ? &px[(size_t)l * stride + (i)] : &px[(size_t)(i) * stride + l]))
-        for (int i = 0; i < n; i++) tmp[i] = AT(i);
-        long sum = 0;
-        for (int k = -r; k <= r; k++) sum += (k < 0 || k >= n) ? 0 : tmp[k];
-        for (int i = 0; i < n; i++) {
-            AT(i) = (uint8_t)(sum / win);
-            int add = i + r + 1, sub = i - r;
-            sum += (add < n ? tmp[add] : 0) - (sub >= 0 ? tmp[sub] : 0);
+    uint64_t inv = ((1ull << 32) + win - 1) / win;       /* sum * inv >> 32 == sum / win for sum <= 255 * win */
+    #define DIV(v) ((uint8_t)(((uint64_t)(v) * inv) >> 32))
+    if (horizontal) {
+        uint8_t *tmp = malloc((size_t)w);
+        for (int y = 0; y < h; y++) {
+            uint8_t *row = px + (size_t)y * stride;
+            memcpy(tmp, row, (size_t)w);
+            long sum = 0;
+            for (int k = 0; k <= r && k < w; k++) sum += tmp[k];
+            for (int i = 0; i < w; i++) {
+                row[i] = DIV(sum);
+                int add = i + r + 1, sub = i - r;
+                if (add < w) sum += tmp[add];
+                if (sub >= 0) sum -= tmp[sub];
+            }
         }
-        #undef AT
+        free(tmp);
+    } else {
+        uint8_t *src = malloc((size_t)w * h);
+        uint32_t *sum = calloc((size_t)w, sizeof *sum);
+        for (int y = 0; y < h; y++) memcpy(src + (size_t)y * w, px + (size_t)y * stride, (size_t)w);
+        for (int k = 0; k <= r && k < h; k++) { const uint8_t *s0 = src + (size_t)k * w; for (int x = 0; x < w; x++) sum[x] += s0[x]; }
+        for (int y = 0; y < h; y++) {
+            uint8_t *row = px + (size_t)y * stride;
+            for (int x = 0; x < w; x++) row[x] = DIV(sum[x]);
+            int add = y + r + 1, sub = y - r;
+            if (add < h) { const uint8_t *a = src + (size_t)add * w; for (int x = 0; x < w; x++) sum[x] += a[x]; }
+            if (sub >= 0) { const uint8_t *b = src + (size_t)sub * w; for (int x = 0; x < w; x++) sum[x] -= b[x]; }
+        }
+        free(sum); free(src);
     }
-    free(tmp);
+    #undef DIV
 }
 
 /* Pops the group pushed with isim_gfx_push_group (its alpha is the shadow shape) and paints a shadow of it:

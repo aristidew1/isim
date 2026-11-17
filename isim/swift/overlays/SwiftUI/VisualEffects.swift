@@ -143,7 +143,7 @@ final class _VFXNode: _WrapperNode {
     let spec: [Double]?
     init(path: String, spec: [Double]?, child: _Node) { self.spec = spec; super.init(path: path, child: child) }
     override var layoutPriority: Double { child.layoutPriority }
-    override func sizeThatFits(_ p: _Proposal) -> CGSize { child.sizeThatFits(p) }
+    override func _measure(_ p: _Proposal) -> CGSize { child.sizeThatFits(p) }
     override func place(_ rect: CGRect) { frame = rect; child.place(CGRect(origin: .zero, size: rect.size)) }
     override func mountView(_ g: _Graph) -> UIView {
         let v = g.view(viewKey) { _PassthroughView() }
@@ -213,7 +213,7 @@ final class _AlphaMaskNode: _WrapperNode {
     let mask: _Node, alignment: Alignment
     init(path: String, alignment: Alignment, mask: _Node, child: _Node) { self.mask = mask; self.alignment = alignment; super.init(path: path, child: child) }
     override var layoutPriority: Double { child.layoutPriority }
-    override func sizeThatFits(_ p: _Proposal) -> CGSize { child.sizeThatFits(p) }
+    override func _measure(_ p: _Proposal) -> CGSize { child.sizeThatFits(p) }
     override func place(_ rect: CGRect) {
         frame = rect
         child.place(CGRect(origin: .zero, size: rect.size))
@@ -268,7 +268,7 @@ final class _ContentShapeNode: _WrapperNode {
     init(path: String, shape: AnyShape, eoFill: Bool, child: _Node) { self.shape = shape; self.eoFill = eoFill; super.init(path: path, child: child) }
     override var layoutPriority: Double { child.layoutPriority }
     override var isSpacer: Bool { child.isSpacer }
-    override func sizeThatFits(_ p: _Proposal) -> CGSize { child.sizeThatFits(p) }
+    override func _measure(_ p: _Proposal) -> CGSize { child.sizeThatFits(p) }
     override func place(_ rect: CGRect) { frame = rect; child.place(CGRect(origin: .zero, size: rect.size)) }
     override func mountView(_ g: _Graph) -> UIView {
         let v = g.view(viewKey) { _SUIContentShapeView(frame: .zero) }
@@ -450,7 +450,7 @@ final class _GeometryEffectNode: _WrapperNode {
         self.evaluate = evaluate; self.graph = graph; self.animated = animated; super.init(path: path, child: child)
     }
     override var layoutPriority: Double { child.layoutPriority }
-    override func sizeThatFits(_ p: _Proposal) -> CGSize { child.sizeThatFits(p) }
+    override func _measure(_ p: _Proposal) -> CGSize { child.sizeThatFits(p) }
     override func place(_ rect: CGRect) { frame = rect; child.place(CGRect(origin: .zero, size: rect.size)) }
     override func mountView(_ g: _Graph) -> UIView {
         let v = g.view(viewKey) { _SUIGeometryEffectView(frame: .zero) }
@@ -640,7 +640,7 @@ final class _ScrollWatchNode: _WrapperNode {
     }
     override var layoutPriority: Double { child.layoutPriority }
     override var ignoresSafeArea: Bool { child.ignoresSafeArea }
-    override func sizeThatFits(_ p: _Proposal) -> CGSize { child.sizeThatFits(p) }
+    override func _measure(_ p: _Proposal) -> CGSize { child.sizeThatFits(p) }
     override func place(_ rect: CGRect) { frame = rect; child.place(CGRect(origin: .zero, size: rect.size)) }
     override func mountView(_ g: _Graph) -> UIView {
         let v = g.view(viewKey) { _SUIScrollWatchView(frame: .zero) }

@@ -123,7 +123,7 @@ extension EnvironmentValues { var _containerShape: _ContainerShape? { get { self
 final class _ContainerShapeNode: _WrapperNode {
     override var layoutPriority: Double { child.layoutPriority }
     override var ignoresSafeArea: Bool { child.ignoresSafeArea }
-    override func sizeThatFits(_ p: _Proposal) -> CGSize { child.sizeThatFits(p) }
+    override func _measure(_ p: _Proposal) -> CGSize { child.sizeThatFits(p) }
     override func place(_ rect: CGRect) { frame = rect; child.place(CGRect(origin: .zero, size: rect.size)) }
 }
 extension View {
@@ -362,7 +362,7 @@ extension ShapeStyle where Self == Material {
 final class _MaterialNode: _Node {
     let kind: _ShapeKind, material: Material
     init(path: String, kind: _ShapeKind, material: Material) { self.kind = kind; self.material = material; super.init(path: path, children: []) }
-    override func sizeThatFits(_ p: _Proposal) -> CGSize { CGSize(width: p.width ?? 10, height: p.height ?? 10) }
+    override func _measure(_ p: _Proposal) -> CGSize { CGSize(width: p.width ?? 10, height: p.height ?? 10) }
     override func mountView(_ g: _Graph) -> UIView {
         let v = g.view(viewKey) { UIVisualEffectView(effect: nil) }
         if (v.effect as? UIBlurEffect)?._isim_style != material.style { v.effect = UIBlurEffect(style: material.style) }
@@ -376,7 +376,7 @@ final class _MaterialNode: _Node {
 final class _ShapeNode: _Node {
     let kind: _ShapeKind, color: Color
     init(path: String, kind: _ShapeKind, color: Color) { self.kind = kind; self.color = color; super.init(path: path, children: []) }
-    override func sizeThatFits(_ p: _Proposal) -> CGSize { CGSize(width: p.width ?? 10, height: p.height ?? 10) }
+    override func _measure(_ p: _Proposal) -> CGSize { CGSize(width: p.width ?? 10, height: p.height ?? 10) }
     override func mountView(_ g: _Graph) -> UIView {
         let v = g.view(viewKey) { UIView() }
         v.backgroundColor = color.uiColor
@@ -396,7 +396,7 @@ func _radius(_ k: _ShapeKind, _ s: CGSize) -> CGFloat {
 final class _ClipNode: _WrapperNode {
     let kind: _ShapeKind
     init(path: String, kind: _ShapeKind, child: _Node) { self.kind = kind; super.init(path: path, child: child) }
-    override func sizeThatFits(_ p: _Proposal) -> CGSize { child.sizeThatFits(p) }
+    override func _measure(_ p: _Proposal) -> CGSize { child.sizeThatFits(p) }
     override func place(_ rect: CGRect) { frame = rect; child.place(CGRect(origin: .zero, size: rect.size)) }
     override func mountView(_ g: _Graph) -> UIView {
         let v = g.view(viewKey) { _PassthroughView() }

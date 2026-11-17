@@ -70,7 +70,7 @@ final class _SectionNode: _Node {
     /// header, rows and footer, as a stack sees them
     var spliced: [_Node] { [header].compactMap { $0 } + _flatten(rows) + [footer].compactMap { $0 } }
     // on its own (outside a List or a stack): like a VStack of its views
-    override func sizeThatFits(_ p: _Proposal) -> CGSize { _stackSize(spliced, axis: .vertical, spacing: 8, p) }
+    override func _measure(_ p: _Proposal) -> CGSize { _stackSize(spliced, axis: .vertical, spacing: 8, p) }
     override func place(_ rect: CGRect) { frame = rect; _stackPlace(spliced, axis: .vertical, spacing: 8, alignment: .center, in: rect, relative: true) }
     override func mountChildren(_ g: _Graph, in view: UIView) { for (i, c) in spliced.enumerated() { g.mount(c, in: view, order: i) } }
 }
@@ -155,7 +155,7 @@ final class _ListNode: _Node {
         super.init(path: path, children: [])
     }
     override var ignoresSafeArea: Bool { true }
-    override func sizeThatFits(_ p: _Proposal) -> CGSize { CGSize(width: p.width ?? 320, height: p.height ?? 480) }
+    override func _measure(_ p: _Proposal) -> CGSize { CGSize(width: p.width ?? 320, height: p.height ?? 480) }
     static let margin: CGFloat = 20, rowInset: CGFloat = 20, minRow: CGFloat = 44
     var rowInset: CGFloat { look.sidebar ? 12 : _ListNode.rowInset }
     override func place(_ rect: CGRect) { _inContainer(rect.size) { placeList(rect) } }
@@ -501,7 +501,7 @@ extension Toggle where Label == Text {
 final class _SwitchNode: _Node {
     let isOn: Binding<Bool>, tint: Color?
     init(path: String, isOn: Binding<Bool>, tint: Color?) { self.isOn = isOn; self.tint = tint; super.init(path: path, children: []) }
-    override func sizeThatFits(_ p: _Proposal) -> CGSize { CGSize(width: 51, height: 31) }
+    override func _measure(_ p: _Proposal) -> CGSize { CGSize(width: 51, height: 31) }
     override func mountView(_ g: _Graph) -> UIView {
         let s = g.view(viewKey) { _SUISwitch(frame: .zero) }
         s.binding = isOn
@@ -695,7 +695,7 @@ final class _NavStackNode: _Node {
     override var ignoresSafeArea: Bool { true }
     var top: _NavLevel { levels.last! }
     var barHeight: CGFloat { 44 }
-    override func sizeThatFits(_ p: _Proposal) -> CGSize { CGSize(width: p.width ?? 320, height: p.height ?? 480) }
+    override func _measure(_ p: _Proposal) -> CGSize { CGSize(width: p.width ?? 320, height: p.height ?? 480) }
     var safeTop: CGFloat = 0, safeBottom: CGFloat = 0
     override func place(_ rect: CGRect) {
         frame = rect
@@ -1077,7 +1077,7 @@ final class _AccessoryNode: _WrapperNode {
     let accessory: String
     init(path: String, child: _Node, accessory: String) { self.accessory = accessory; super.init(path: path, child: child) }
     override var rowAccessory: String? { accessory }
-    override func sizeThatFits(_ p: _Proposal) -> CGSize { child.sizeThatFits(p) }
+    override func _measure(_ p: _Proposal) -> CGSize { child.sizeThatFits(p) }
     override func place(_ rect: CGRect) { frame = rect; child.place(CGRect(origin: .zero, size: rect.size)) }
 }
 
@@ -1177,7 +1177,21 @@ public struct _ToolbarEntry {
     /// DefaultToolbarItem(kind: .search) (iOS26+Bars.swift): a button that starts the stack's search
     var defaultSearch = false
 }
-public protocol ToolbarContent { var _items: [_ToolbarEntry] { get } }
+/// Toolbar items. Apps compose their own from `body`; isim's own items give `_items` and have no body.
+public protocol ToolbarContent {
+    associatedtype Body: ToolbarContent = Never
+    @ToolbarContentBuilder var body: Body { get }
+    var _items: [_ToolbarEntry] { get }
+}
+extension ToolbarContent {
+    public var _items: [_ToolbarEntry] { body._items }
+}
+extension ToolbarContent where Body == Never {
+    public var body: Never { fatalError("this ToolbarContent has no body") }
+}
+extension Never: ToolbarContent {
+    public var _items: [_ToolbarEntry] { [] }
+}
 public struct ToolbarItem<ID, Content: View>: ToolbarContent {
     let placement: ToolbarItemPlacement, content: Content
     public var _items: [_ToolbarEntry] { [_ToolbarEntry(placement: placement, view: AnyView(content))] }

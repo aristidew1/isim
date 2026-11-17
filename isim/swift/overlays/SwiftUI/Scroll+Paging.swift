@@ -46,6 +46,7 @@ extension EnvironmentValues { var _scrollOptions: _ScrollOptions { get { self[_S
     var child = content(ctx.child("scroll").with {
         $0._contentMargins = nil; $0._indicatorMargins = nil; $0._scrollOptions.position = nil; $0._scrollOptions.scrollPosition = nil
         $0._scrollOptions.phase = nil; $0._scrollOptions.flashTrigger = nil; $0._scrollOptions.flashOnAppear = false
+        $0._stackAxis = axes == .horizontal ? .horizontal : .vertical     // its content is stacked along the scroll axis
     })
     if let m = margins { child = _PaddingNode(path: ctx.path + "/margins", insets: m, child: child) }
     let n = _ScrollNode(path: ctx.path, axes: axes, indicators: indicators && env._scrollOptions.indicators != false, child: child)
@@ -59,7 +60,7 @@ extension EnvironmentValues { var _scrollOptions: _ScrollOptions { get { self[_S
 /// content coordinates, with their ids.
 final class _ScrollTargetLayoutNode: _WrapperNode {
     override var layoutPriority: Double { child.layoutPriority }
-    override func sizeThatFits(_ p: _Proposal) -> CGSize { child.sizeThatFits(p) }
+    override func _measure(_ p: _Proposal) -> CGSize { child.sizeThatFits(p) }
     override func place(_ rect: CGRect) { frame = rect; child.place(CGRect(origin: .zero, size: rect.size)) }
 }
 @MainActor func _scrollTargets(_ root: _Node) -> [(CGRect, AnyHashable?)] {

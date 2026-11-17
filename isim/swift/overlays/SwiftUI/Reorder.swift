@@ -71,7 +71,7 @@ final class _ReorderItemNode: _WrapperNode {
     init(path: String, id: AnyHashable, collection: AnyHashable, child: _Node) { self.id = id; self.collection = collection; super.init(path: path, child: child) }
     override var layoutPriority: Double { child.layoutPriority }
     override var isSpacer: Bool { child.isSpacer }
-    override func sizeThatFits(_ p: _Proposal) -> CGSize { child.sizeThatFits(p) }
+    override func _measure(_ p: _Proposal) -> CGSize { child.sizeThatFits(p) }
     override func place(_ rect: CGRect) { frame = rect; child.place(CGRect(origin: .zero, size: rect.size)) }
     override func mountView(_ g: _Graph) -> UIView {
         let v = g.view(viewKey) { _SUIReorderItemView() }
@@ -133,7 +133,7 @@ final class _ReorderContainerNode: _WrapperNode {
         self.enabled = enabled; self.apply = apply; super.init(path: path, child: child)
     }
     override var layoutPriority: Double { child.layoutPriority }
-    override func sizeThatFits(_ p: _Proposal) -> CGSize { child.sizeThatFits(p) }
+    override func _measure(_ p: _Proposal) -> CGSize { child.sizeThatFits(p) }
     override func place(_ rect: CGRect) { frame = rect; child.place(CGRect(origin: .zero, size: rect.size)) }
     override func mountView(_ g: _Graph) -> UIView {
         let v = g.view(viewKey) { _SUIReorderContainerView() }

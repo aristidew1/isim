@@ -317,7 +317,7 @@ final class _TransitionNode: _WrapperNode {
     let transition: AnyTransition
     init(path: String, transition: AnyTransition, child: _Node) { self.transition = transition; super.init(path: path, child: child) }
     override var layoutPriority: Double { child.layoutPriority }
-    override func sizeThatFits(_ p: _Proposal) -> CGSize { child.sizeThatFits(p) }
+    override func _measure(_ p: _Proposal) -> CGSize { child.sizeThatFits(p) }
     override func place(_ rect: CGRect) { frame = rect; child.place(CGRect(origin: .zero, size: rect.size)) }
     override func mountView(_ g: _Graph) -> UIView {
         let v = g.view(viewKey) { _PassthroughView() }
@@ -330,7 +330,7 @@ final class _AnimationScopeNode: _WrapperNode {
     let animation: Animation?, active: Bool
     init(path: String, animation: Animation?, active: Bool, child: _Node) { self.animation = animation; self.active = active; super.init(path: path, child: child) }
     override var layoutPriority: Double { child.layoutPriority }
-    override func sizeThatFits(_ p: _Proposal) -> CGSize { child.sizeThatFits(p) }
+    override func _measure(_ p: _Proposal) -> CGSize { child.sizeThatFits(p) }
     override func place(_ rect: CGRect) { frame = rect; child.place(CGRect(origin: .zero, size: rect.size)) }
     override func mountView(_ g: _Graph) -> UIView { g.view(viewKey) { _PassthroughView() } }
     override func mountChildren(_ g: _Graph, in view: UIView) {
@@ -357,7 +357,7 @@ final class _MatchedNode: _WrapperNode {
         return CGRect(x: p.x - anchor.x * size.width, y: p.y - anchor.y * size.height, width: size.width, height: size.height)
     }
     override var layoutPriority: Double { child.layoutPriority }
-    override func sizeThatFits(_ p: _Proposal) -> CGSize { child.sizeThatFits(p) }
+    override func _measure(_ p: _Proposal) -> CGSize { child.sizeThatFits(p) }
     override func place(_ rect: CGRect) { frame = rect; child.place(CGRect(origin: .zero, size: rect.size)) }
     override func mountView(_ g: _Graph) -> UIView { g.view(viewKey) { _PassthroughView() } }
 }

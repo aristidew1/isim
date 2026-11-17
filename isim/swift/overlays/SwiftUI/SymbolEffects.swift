@@ -161,7 +161,7 @@ final class _SymbolEffectNode: _WrapperNode {
     var active = false, indefinite = false, trigger = false
     init(path: String, kind: Int, options: SymbolEffectOptions, child: _Node) { self.kind = kind; self.options = options; super.init(path: path, child: child) }
     override var layoutPriority: Double { child.layoutPriority }
-    override func sizeThatFits(_ p: _Proposal) -> CGSize { child.sizeThatFits(p) }
+    override func _measure(_ p: _Proposal) -> CGSize { child.sizeThatFits(p) }
     override func place(_ rect: CGRect) { frame = rect; child.place(CGRect(origin: .zero, size: rect.size)) }
     override func mountView(_ g: _Graph) -> UIView {
         let v = g.view(viewKey) { _SUISymbolEffectView(frame: .zero) }

@@ -130,7 +130,7 @@ extension ProgressView where Label == Text, CurrentValueLabel == EmptyView {
 final class _ProgressNode: _Node {
     let fraction: Double?, tint: UIColor
     init(path: String, fraction: Double?, tint: UIColor) { self.fraction = fraction; self.tint = tint; super.init(path: path, children: []) }
-    override func sizeThatFits(_ p: _Proposal) -> CGSize {
+    override func _measure(_ p: _Proposal) -> CGSize {
         fraction == nil ? CGSize(width: 20, height: 20) : CGSize(width: min(p.width ?? 100, 1e6), height: 4)
     }
     override func mountView(_ g: _Graph) -> UIView {
@@ -704,7 +704,7 @@ final class _PasteButtonNode: _Node {
         self.types = types; self.deliver = deliver; self.enabled = enabled; super.init(path: path, children: [])
     }
     var mode: UIPasteControl.DisplayMode { labelStyle == 2 ? .iconOnly : labelStyle == 1 ? .labelOnly : .iconAndLabel }
-    override func sizeThatFits(_ p: _Proposal) -> CGSize {
+    override func _measure(_ p: _Proposal) -> CGSize {
         let c = UIPasteControl(configuration: { let c = UIPasteControl.Configuration(); c.displayMode = mode; return c }())
         return c.intrinsicContentSize
     }

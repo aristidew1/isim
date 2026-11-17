@@ -299,7 +299,7 @@ final class _AXReplacementNode: _Node {
     }
     override var layoutPriority: Double { content.layoutPriority }
     override var isSpacer: Bool { content.isSpacer }
-    override func sizeThatFits(_ p: _Proposal) -> CGSize { content.sizeThatFits(p) }
+    override func _measure(_ p: _Proposal) -> CGSize { content.sizeThatFits(p) }
     override func place(_ rect: CGRect) {
         frame = rect
         let b = CGRect(origin: .zero, size: rect.size)

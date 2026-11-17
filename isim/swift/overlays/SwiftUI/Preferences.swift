@@ -22,7 +22,7 @@ final class _PreferenceNode: _WrapperNode {
     override var layoutPriority: Double { child.layoutPriority }
     override var isSpacer: Bool { child.isSpacer }
     override var transparent: Bool { false }
-    override func sizeThatFits(_ p: _Proposal) -> CGSize { child.sizeThatFits(p) }
+    override func _measure(_ p: _Proposal) -> CGSize { child.sizeThatFits(p) }
     override func place(_ rect: CGRect) { frame = rect; child.place(CGRect(origin: .zero, size: rect.size)) }
 }
 
@@ -103,7 +103,7 @@ final class _OnPreferenceNode<K: PreferenceKey>: _WrapperNode where K.Value: Equ
         graph.usedKeys.insert(path + "#prefchange")
     }
     override var layoutPriority: Double { child.layoutPriority }
-    override func sizeThatFits(_ p: _Proposal) -> CGSize { child.sizeThatFits(p) }
+    override func _measure(_ p: _Proposal) -> CGSize { child.sizeThatFits(p) }
     override func place(_ rect: CGRect) {
         frame = rect
         child.place(CGRect(origin: .zero, size: rect.size))
@@ -124,7 +124,7 @@ final class _OnPreferenceNode<K: PreferenceKey>: _WrapperNode where K.Value: Equ
 /// The view an anchor measures.
 final class _AnchorSourceNode: _WrapperNode {
     override var layoutPriority: Double { child.layoutPriority }
-    override func sizeThatFits(_ p: _Proposal) -> CGSize { child.sizeThatFits(p) }
+    override func _measure(_ p: _Proposal) -> CGSize { child.sizeThatFits(p) }
     override func place(_ rect: CGRect) { frame = rect; child.place(CGRect(origin: .zero, size: rect.size)) }
 }
 
@@ -177,7 +177,7 @@ final class _PreferenceHostNode<K: PreferenceKey>: _WrapperNode {
         super.init(path: path, child: child)
     }
     override var layoutPriority: Double { child.layoutPriority }
-    override func sizeThatFits(_ p: _Proposal) -> CGSize { child.sizeThatFits(p) }
+    override func _measure(_ p: _Proposal) -> CGSize { child.sizeThatFits(p) }
     override func place(_ rect: CGRect) {
         frame = rect
         child.place(CGRect(origin: .zero, size: rect.size))
@@ -218,7 +218,7 @@ final class _GeometryChangeNode<T: Equatable>: _WrapperNode {
     }
     override var layoutPriority: Double { child.layoutPriority }
     override var isSpacer: Bool { child.isSpacer }
-    override func sizeThatFits(_ p: _Proposal) -> CGSize { child.sizeThatFits(p) }
+    override func _measure(_ p: _Proposal) -> CGSize { child.sizeThatFits(p) }
     override func place(_ rect: CGRect) {
         frame = rect
         child.place(CGRect(origin: .zero, size: rect.size))

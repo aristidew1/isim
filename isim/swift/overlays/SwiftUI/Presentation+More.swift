@@ -12,7 +12,7 @@ struct _PopoverAnchor { let anchor: PopoverAttachmentAnchor; let edge: Edge }
 final class _PresentationAnchorNode: _WrapperNode {
     override var layoutPriority: Double { child.layoutPriority }
     override var ignoresSafeArea: Bool { child.ignoresSafeArea }
-    override func sizeThatFits(_ p: _Proposal) -> CGSize { child.sizeThatFits(p) }
+    override func _measure(_ p: _Proposal) -> CGSize { child.sizeThatFits(p) }
     override func place(_ rect: CGRect) { frame = rect; child.place(CGRect(origin: .zero, size: rect.size)) }
 }
 
@@ -161,7 +161,7 @@ final class _InspectorNode: _Node {
         super.init(path: path, children: [main, inspector])
     }
     override var ignoresSafeArea: Bool { main.ignoresSafeArea }
-    override func sizeThatFits(_ p: _Proposal) -> CGSize { CGSize(width: min(p.width ?? 700, 1e6), height: min(p.height ?? 700, 1e6)) }
+    override func _measure(_ p: _Proposal) -> CGSize { CGSize(width: min(p.width ?? 700, 1e6), height: min(p.height ?? 700, 1e6)) }
     override func place(_ rect: CGRect) {
         frame = rect
         let w = min(width, rect.width / 2)

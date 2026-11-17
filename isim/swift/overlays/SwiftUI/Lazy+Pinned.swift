@@ -91,7 +91,7 @@ public struct LazyVStack<Content: View>: View, _PrimitiveView {
     }
     public var body: Never { fatalError() }
     func _makeNode(_ ctx: _Context) -> _Node {
-        let n = _StackNode(path: ctx.path, axis: .vertical, spacing: spacing, alignment: Alignment(horizontal: alignment, vertical: .center), children: [_resolve(content, ctx.child("c"))])
+        let n = _StackNode(path: ctx.path, axis: .vertical, spacing: spacing, alignment: Alignment(horizontal: alignment, vertical: .center), children: [_resolve(content, ctx.child("c").with { $0._stackAxis = .vertical })])
         n.pinned = pinnedViews
         n.lazy = true
         return n
@@ -104,7 +104,7 @@ public struct LazyHStack<Content: View>: View, _PrimitiveView {
     }
     public var body: Never { fatalError() }
     func _makeNode(_ ctx: _Context) -> _Node {
-        let n = _StackNode(path: ctx.path, axis: .horizontal, spacing: spacing, alignment: Alignment(horizontal: .center, vertical: alignment), children: [_resolve(content, ctx.child("c"))])
+        let n = _StackNode(path: ctx.path, axis: .horizontal, spacing: spacing, alignment: Alignment(horizontal: .center, vertical: alignment), children: [_resolve(content, ctx.child("c").with { $0._stackAxis = .horizontal })])
         n.pinned = pinnedViews
         n.lazy = true
         return n
@@ -209,7 +209,7 @@ final class _LazyGridNode: _Node {
         return out
     }
     func totalTracks(_ ts: [(CGFloat, CGFloat, Alignment?)]) -> CGFloat { ts.reduce(0) { $0 + $1.0 } + ts.dropLast().reduce(0) { $0 + $1.1 } }
-    override func sizeThatFits(_ p: _Proposal) -> CGSize {
+    override func _measure(_ p: _Proposal) -> CGSize {
         let length = min(cross(p) ?? (axis == .vertical ? 320 : 300), 1e6)
         let ts = trackSizes(length)
         let width = hasFlexible ? length : totalTracks(ts)

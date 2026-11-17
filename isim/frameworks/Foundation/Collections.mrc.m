@@ -95,7 +95,36 @@ NUMU(numberWithUnsignedLongLong:, unsigned long long) NUMI(numberWithInteger:, N
 - (instancetype)initWithUnsignedLongLong:(unsigned long long)v { _t = ISIM_NUM_UINT; _n.u = v; return self; }
 - (instancetype)initWithUnsignedInteger:(NSUInteger)v { _t = ISIM_NUM_UINT; _n.u = v; return self; }
 - (instancetype)initWithFloat:(float)v { _t = ISIM_NUM_DBL; _n.d = v; return self; }
-- (void)_isim_getNumber:(isim_numv *)v { v->t = _t; v->u = _n.u; }
+/* a subclass from outside the cluster (Kotlin/Native's KotlinInt, KotlinDouble…) keeps its value itself and gives it
+   through Apple's primitives, -objCType and -getValue:; NSNumber's own ivars stay zero */
+static BOOL overrides(Class c, SEL s) { return class_getMethodImplementation(c, s) != class_getMethodImplementation([NSNumber class], s); }
+- (void)_isim_getNumber:(isim_numv *)v {
+    Class c = object_getClass(self);
+    if (c != [NSNumber class] && overrides(c, @selector(getValue:)) && overrides(c, @selector(objCType))) {
+        const char *t = [self objCType];
+        union { char c; unsigned char uc; short s; unsigned short us; int i; unsigned int ui; long l; unsigned long ul;
+                long long ll; unsigned long long ull; float f; double d; BOOL b; } u;
+        memset(&u, 0, sizeof u);
+        [self getValue:&u];
+        switch (t ? t[0] : 0) {
+        case 'c': v->t = ISIM_NUM_INT; v->i = u.c; return;
+        case 'B': v->t = ISIM_NUM_BOOL; v->i = u.b ? 1 : 0; return;
+        case 'C': v->t = ISIM_NUM_UINT; v->u = u.uc; return;
+        case 's': v->t = ISIM_NUM_INT; v->i = u.s; return;
+        case 'S': v->t = ISIM_NUM_UINT; v->u = u.us; return;
+        case 'i': v->t = ISIM_NUM_INT; v->i = u.i; return;
+        case 'I': v->t = ISIM_NUM_UINT; v->u = u.ui; return;
+        case 'l': v->t = ISIM_NUM_INT; v->i = u.l; return;
+        case 'L': v->t = ISIM_NUM_UINT; v->u = u.ul; return;
+        case 'q': v->t = ISIM_NUM_INT; v->i = u.ll; return;
+        case 'Q': v->t = ISIM_NUM_UINT; v->u = u.ull; return;
+        case 'f': v->t = ISIM_NUM_DBL; v->d = u.f; return;
+        case 'd': v->t = ISIM_NUM_DBL; v->d = u.d; return;
+        default: break;
+        }
+    }
+    v->t = _t; v->u = _n.u;
+}
 - (long long)longLongValue { isim_numv v = numv(self); return v.t == ISIM_NUM_DBL ? (long long)v.d : v.i; }
 - (unsigned long long)unsignedLongLongValue { isim_numv v = numv(self); return v.t == ISIM_NUM_DBL ? (unsigned long long)v.d : v.u; }
 - (double)doubleValue { isim_numv v = numv(self); return v.t == ISIM_NUM_DBL ? v.d : v.t == ISIM_NUM_UINT ? (double)v.u : (double)v.i; }

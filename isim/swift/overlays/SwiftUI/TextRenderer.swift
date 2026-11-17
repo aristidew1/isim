@@ -217,7 +217,7 @@ final class _RenderedTextNode: _Node {
         super.init(path: path, children: [])
     }
     override var layoutPriority: Double { rich.layoutPriority }
-    override func sizeThatFits(_ p: _Proposal) -> CGSize {
+    override func _measure(_ p: _Proposal) -> CGSize {
         let rich = rich
         return renderer.size(ProposedViewSize(width: p.width, height: p.height)) { q in rich.sizeThatFits(_Proposal(width: q.width, height: q.height)) }
     }

@@ -1,6 +1,7 @@
 #pragma once
 /* isim CoreText (self-authored subset): fonts and descriptors resolved through the host's fontconfig, glyph coverage,
  * font registration, and lines / runs / framesetters laid out by the host's Pango. */
+#include <CoreText/SFNTLayoutTypes.h>
 #include <CoreText/CTFontDescriptor.h>
 #include <CoreText/CTFont.h>
 #include <CoreText/CTFontManager.h>

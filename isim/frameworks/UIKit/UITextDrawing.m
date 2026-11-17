@@ -167,7 +167,14 @@ static int css_weight(double w) {
 static void font_attrs(NSMutableString *m, UIFont *f) {
     if (!f) return;
     [m appendFormat:@" size=\"%ld\" weight=\"%d\"", lround(f.pointSize * 1024), css_weight(f._isim_weight)];   /* 1024ths of a point; the host lays out at 72 dpi (1 pt = 1 px) */
-    if (f._isim_family.length) { [m appendString:@" font_family=\""]; escape_into(m, f._isim_family); [m appendString:@"\""]; }
+    if (f._isim_family.length) {
+        NSString *fam = f._isim_family; NSRange at = [fam rangeOfString:@"@"];
+        if (at.location != NSNotFound) {           /* variable font axes: a font description with only its variations */
+            [m appendString:@" font=\"@"]; escape_into(m, [fam substringFromIndex:at.location + 1]); [m appendString:@"\""];
+            fam = [fam substringToIndex:at.location];
+        }
+        [m appendString:@" font_family=\""]; escape_into(m, fam); [m appendString:@"\""];
+    }
     else if (f._isim_mono) [m appendString:@" font_family=\"monospace\""];
     if (f._isim_italic) [m appendString:@" style=\"italic\""];
     if (f._isim_tabular) [m appendString:@" font_features=\"tnum\""];

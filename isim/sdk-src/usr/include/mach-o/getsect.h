@@ -4,4 +4,5 @@
 #include <mach-o/loader.h>
 __BEGIN_DECLS
 uint8_t *getsectiondata(const struct mach_header_64 *mhp, const char *segname, const char *sectname, unsigned long *size);
+uint8_t *getsegmentdata(const struct mach_header_64 *mhp, const char *segname, unsigned long *size);
 __END_DECLS

@@ -284,7 +284,7 @@ void isim_ui_register_app_fonts(void) {
     });
 }
 
-@implementation UIFont { CGFloat _size, _weight; BOOL _mono, _italic, _tabular; NSString *_name, *_family, *_design; }
+@implementation UIFont { CGFloat _size, _weight; BOOL _mono, _italic, _tabular; NSString *_name, *_family, *_design, *_variations; }
 + (UIFont *)_size:(CGFloat)s weight:(CGFloat)w mono:(BOOL)m name:(NSString *)n {
     UIFont *f = [UIFont new]; f->_size = s; f->_weight = w; f->_mono = m; f->_name = n; return f;
 }
@@ -421,9 +421,12 @@ static BOOL ios_builtin_family(NSString *name, BOOL *mono) {
 - (UIFont *)fontWithSize:(CGFloat)s { UIFont *f = [self _isim_copy]; f->_size = s; return f; }
 - (UIFont *)_isim_copy {
     UIFont *f = [UIFont _size:_size weight:_weight mono:_mono name:_name];
-    f->_family = _family; f->_italic = _italic; f->_tabular = _tabular; f->_design = _design;
+    f->_family = _family; f->_italic = _italic; f->_tabular = _tabular; f->_design = _design; f->_variations = _variations;
     return f;
 }
+/* variable font axes (kCTFontVariationAttribute) as Pango writes them: "wdth=64,wght=800" */
+- (UIFont *)_isim_withVariations:(NSString *)v { UIFont *f = [self _isim_copy]; f->_variations = v.length ? [v copy] : nil; return f; }
+- (NSString *)_isim_variations { return _variations; }
 /* a variant of this font (UIFontDescriptor): weight, italic, monospaced, tabular digits, design */
 - (UIFont *)_isim_variantWeight:(CGFloat)w italic:(BOOL)it mono:(BOOL)mono tabular:(BOOL)tab design:(NSString *)design {
     UIFont *f = [self _isim_copy];
@@ -445,7 +448,8 @@ static BOOL ios_builtin_family(NSString *name, BOOL *mono) {
 /* the family text is drawn with (nil: the system font); the serif design uses a serif face of the host (adapted).
    Named, not the "serif" alias: fontconfig binds aliases weakly, so the system font after it would win */
 - (NSString *)_isim_family {
-    if (_family) return _family;
+    /* the axes ride with the family to the host's text functions ("Archivo@wdth=64,wght=800") */
+    if (_family) return _variations ? [NSString stringWithFormat:@"%@@%@", _family, _variations] : _family;
     return [_design isEqualToString:@"NSCTFontUIFontDesignSerif"] ? @"New York,Noto Serif,DejaVu Serif,Liberation Serif,Tinos,Times New Roman,serif" : nil;
 }
 - (NSString *)fontName { return _name; }
@@ -463,7 +467,7 @@ static BOOL ios_builtin_family(NSString *name, BOOL *mono) {
 - (BOOL)_isim_tabular { return _tabular; }
 - (NSString *)_isim_design { return _design; }
 - (id)copyWithZone:(NSZone *)z { return self; }
-- (BOOL)isEqual:(UIFont *)o { return [o isKindOfClass:[UIFont class]] && o->_size == _size && o->_weight == _weight && o->_mono == _mono && o->_italic == _italic && o->_tabular == _tabular && (o->_family == _family || [o->_family isEqualToString:_family]); }
+- (BOOL)isEqual:(UIFont *)o { return [o isKindOfClass:[UIFont class]] && o->_size == _size && o->_weight == _weight && o->_mono == _mono && o->_italic == _italic && o->_tabular == _tabular && (o->_family == _family || [o->_family isEqualToString:_family]) && (o->_variations == _variations || [o->_variations isEqualToString:_variations]); }
 - (NSUInteger)hash { return (NSUInteger)(_size * 100) ^ (NSUInteger)(_weight * 1000); }
 - (NSString *)description { return [NSString stringWithFormat:@"<UICTFont: %p> font-family: \"%@\"; font-weight: %g; font-size: %.2fpt", self, self.familyName, _weight, _size]; }
 @end

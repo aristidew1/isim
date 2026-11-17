@@ -211,6 +211,10 @@ ISIM_GUEST_ABI static int d_isOSVersionAtLeast(int major, int minor, int sub) { 
 ISIM_GUEST_ABI static unsigned d_qos_class_self(void) { return getpid() == gettid() ? 0x21u : 0x15u; }
 ISIM_GUEST_ABI static unsigned d_qos_class_main(void) { return 0x21u; }
 ISIM_GUEST_ABI static int d_pthread_set_qos_class_self_np(unsigned q, int rel) { return 0; }
+/* QoS overrides (a thread boosted while another waits for it): threads are not scheduled by QoS here, so an override
+   is only a token to end */
+ISIM_GUEST_ABI static void *d_pthread_override_qos_class_start_np(pthread_t t, unsigned q, int rel) { static char token; return &token; }
+ISIM_GUEST_ABI static int d_pthread_override_qos_class_end_np(void *override) { return 0; }
 ISIM_GUEST_ABI static int d_pthread_get_qos_class_np(pthread_t t, unsigned *q, int *rel) { if (q) *q = t == pthread_self() && getpid() == gettid() ? 0x21u : 0x15u; if (rel) *rel = 0; return 0; }
 ISIM_GUEST_ABI static uint64_t d_clock_gettime_nsec_np(int clk) {
     struct timespec ts; if (d_clock_gettime(clk, &ts)) return 0;
@@ -534,7 +538,9 @@ static const struct shim libsystem_table[] = {
     A("_opendir$INODE64", d_opendir), A("_readdir$INODE64", d_readdir),
     A("_iswalpha", d_iswalpha), A("_iswdigit", d_iswdigit), A("_iswalnum", d_iswalnum), A("_iswspace", d_iswspace), A("_iswpunct", d_iswpunct),
     A("_iswupper", d_iswupper), A("_iswlower", d_iswlower), A("_iswcntrl", d_iswcntrl), A("_iswprint", d_iswprint), A("_iswxdigit", d_iswxdigit),
-    A("_iswgraph", d_iswgraph), A("_towupper", d_towupper), A("_towlower", d_towlower), A("_qos_class_self", d_qos_class_self), I("___isPlatformVersionAtLeast", d_isPlatformVersionAtLeast), I("___isOSVersionAtLeast", d_isOSVersionAtLeast), A("_qos_class_main", d_qos_class_main), A("_pthread_set_qos_class_self_np", d_pthread_set_qos_class_self_np), A("_pthread_get_qos_class_np", d_pthread_get_qos_class_np), A("_clock_getres", d_clock_getres), A("_memset_s", d_memset_s), I("_memset_pattern4", d_memset_pattern4), I("_memset_pattern8", d_memset_pattern8), I("_memset_pattern16", d_memset_pattern16), A("_clock_gettime_nsec_np", d_clock_gettime_nsec_np),
+    A("_iswgraph", d_iswgraph), A("_towupper", d_towupper), A("_towlower", d_towlower), A("_qos_class_self", d_qos_class_self), A("_pthread_override_qos_class_start_np", d_pthread_override_qos_class_start_np), A("_pthread_override_qos_class_end_np", d_pthread_override_qos_class_end_np),
+    /* the $DARWIN_EXTSN variants (code built without _POSIX_C_SOURCE, as Kotlin/Native's runtime is) behave the same */
+    A("_fopen$DARWIN_EXTSN", fopen), A("_realpath$DARWIN_EXTSN", realpath), I("___isPlatformVersionAtLeast", d_isPlatformVersionAtLeast), I("___isOSVersionAtLeast", d_isOSVersionAtLeast), A("_qos_class_main", d_qos_class_main), A("_pthread_set_qos_class_self_np", d_pthread_set_qos_class_self_np), A("_pthread_get_qos_class_np", d_pthread_get_qos_class_np), A("_clock_getres", d_clock_getres), A("_memset_s", d_memset_s), I("_memset_pattern4", d_memset_pattern4), I("_memset_pattern8", d_memset_pattern8), I("_memset_pattern16", d_memset_pattern16), A("_clock_gettime_nsec_np", d_clock_gettime_nsec_np),
     MACH_SHIMS,
     LIBC_EXTRAS_SHIMS,
     /* math (Darwin's libm lives in libSystem): full C99 set incl. f/l variants */

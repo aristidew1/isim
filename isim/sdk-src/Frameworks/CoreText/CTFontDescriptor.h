@@ -37,6 +37,8 @@ CT_EXPORT const CFStringRef kCTFontSymbolicTrait;
 CT_EXPORT const CFStringRef kCTFontWeightTrait;
 CT_EXPORT const CFStringRef kCTFontWidthTrait;
 CT_EXPORT const CFStringRef kCTFontSlantTrait;
+/* a CFDictionary of axis identifier (a CFNumber, the four-character tag) to value */
+CT_EXPORT const CFStringRef kCTFontVariationAttribute;
 CT_EXPORT const CFStringRef kCTFontURLAttribute;               /* the font file (a CFURL) */
 /* features: OpenType tags (kCTFontOpenTypeFeatureTag/Value) go to the shaper (HarfBuzz); AAT type/selector pairs are
  * mapped to their OpenType features (ligatures, number spacing and case, fractions, vertical position, slashed zero,

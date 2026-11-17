@@ -240,6 +240,17 @@ public struct Binding<Value> {
     public var wrappedValue: Value { get { get() } nonmutating set { set(newValue) } }
     public var projectedValue: Binding<Value> { self }
     public init(projectedValue: Binding<Value>) { self = projectedValue }
+    /// A binding to an optional value from one to a value.
+    public init<V>(_ base: Binding<V>) where Value == V? { self.init(get: { base.wrappedValue }, set: { if let v = $0 { base.wrappedValue = v } }) }
+    /// A binding to the value an optional binding holds; nil when it holds none. Reads keep the last value once it
+    /// has gone, like SwiftUI, so a view that is going away can still be drawn.
+    public init?(_ base: Binding<Value?>) {
+        guard let first = base.wrappedValue else { return nil }
+        self.init(get: { base.wrappedValue ?? first }, set: { base.wrappedValue = $0 })
+    }
+    public init<V: Hashable>(_ base: Binding<V>) where Value == AnyHashable {
+        self.init(get: { AnyHashable(base.wrappedValue) }, set: { if let v = $0.base as? V { base.wrappedValue = v } })
+    }
     public subscript<Subject>(dynamicMember keyPath: WritableKeyPath<Value, Subject>) -> Binding<Subject> {
         let g = get, s = set
         return Binding<Subject>(get: { g()[keyPath: keyPath] }, set: { v in var whole = g(); whole[keyPath: keyPath] = v; s(whole) })
@@ -286,7 +297,10 @@ public protocol EnvironmentKey {
 }
 
 public struct EnvironmentValues: CustomStringConvertible {
-    var values: [ObjectIdentifier: Any] = [:]
+    /// Values are boxed: every modifier that writes the environment copies this dictionary, and copying a box is one
+    /// retain where copying an `Any` copies the value (closures, weak references, nested dictionaries).
+    final class _Box { let value: Any; init(_ value: Any) { self.value = value } }
+    var values: [ObjectIdentifier: _Box] = [:]
     /// changes with every write: equal revisions are equal environments (Subview placement)
     var _rev = 0
     nonisolated(unsafe) static var _nextRev = 0
@@ -294,8 +308,8 @@ public struct EnvironmentValues: CustomStringConvertible {
     var _traits: AnyObject?
     public init() {}
     public subscript<K: EnvironmentKey>(key: K.Type) -> K.Value {
-        get { values[ObjectIdentifier(key)] as? K.Value ?? _bridgedTraitValue(key, _traits) ?? K.defaultValue }
-        set { values[ObjectIdentifier(key)] = newValue; EnvironmentValues._nextRev &+= 1; _rev = EnvironmentValues._nextRev }
+        get { values[ObjectIdentifier(key)]?.value as? K.Value ?? _bridgedTraitValue(key, _traits) ?? K.defaultValue }
+        set { values[ObjectIdentifier(key)] = _Box(newValue); EnvironmentValues._nextRev &+= 1; _rev = EnvironmentValues._nextRev }
     }
     public var description: String { "EnvironmentValues(\(values.count) values)" }
 }

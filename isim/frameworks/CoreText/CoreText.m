@@ -21,6 +21,7 @@ const CFStringRef kCTFontWeightTrait = CFSTR("NSCTFontWeightTrait");
 const CFStringRef kCTFontWidthTrait = CFSTR("NSCTFontProportionTrait");
 const CFStringRef kCTFontSlantTrait = CFSTR("NSCTFontSlantTrait");
 const CFStringRef kCTFontFeatureSettingsAttribute = CFSTR("NSCTFontFeatureSettingsAttribute");
+const CFStringRef kCTFontVariationAttribute = CFSTR("NSCTFontVariationAttribute");
 const CFStringRef kCTFontFeaturesAttribute = CFSTR("NSCTFontFeaturesAttribute");
 const CFStringRef kCTFontFeatureTypeIdentifierKey = CFSTR("CTFeatureTypeIdentifier");
 const CFStringRef kCTFontFeatureTypeNameKey = CFSTR("CTFeatureTypeName");
@@ -98,7 +99,10 @@ __NSCTFont *isim_ct_font(id f) {
     c = [__NSCTFont new];                       /* a UIFont: the same family, weight and slant */
     c.size = [f pointSize];
     if ([f respondsToSelector:@selector(_isim_weight)]) c.weight = [f _isim_weight];
-    if ([f respondsToSelector:@selector(_isim_family)]) c.family = [f _isim_family];
+    if ([f respondsToSelector:@selector(_isim_family)]) {
+        NSString *fam = [f _isim_family]; NSRange at = fam ? [fam rangeOfString:@"@"] : NSMakeRange(NSNotFound, 0);
+        c.family = at.location == NSNotFound ? fam : [fam substringToIndex:at.location];     /* without UIKit's variable-font axes */
+    }
     if ([f respondsToSelector:@selector(_isim_mono)]) c.mono = [f _isim_mono];
     if ([f respondsToSelector:@selector(_isim_italic)]) c.italic = [f _isim_italic];
     c.name = [f respondsToSelector:@selector(fontName)] ? [f fontName] : @".SFUI-Regular";

@@ -413,7 +413,7 @@ final class _PaintedTextNode: _Node {
     let text: _Node, fill: _Node
     init(path: String, text: _Node, fill: _Node) { self.text = text; self.fill = fill; super.init(path: path, children: [fill]) }
     override var layoutPriority: Double { text.layoutPriority }
-    override func sizeThatFits(_ p: _Proposal) -> CGSize { text.sizeThatFits(p) }
+    override func _measure(_ p: _Proposal) -> CGSize { text.sizeThatFits(p) }
     override func place(_ rect: CGRect) {
         frame = rect
         fill.place(CGRect(origin: .zero, size: rect.size))
@@ -454,6 +454,7 @@ final class _PaintedTextNode: _Node {
                           alignment: env.multilineTextAlignment)
         n.truncation = style.truncation; n.minimumScale = style.minimumScale; n.tightening = style.tightening
         n.contentTransition = env._contentTransition
+        n.lineSpacing = env.lineSpacing
         return n
     }
     if runs.isEmpty { return _TextNode(path: ctx.path, text: "", font: (env.font ?? .body).uiFont, color: UIColor.label, minLines: lines.0, maxLines: lines.1, alignment: env.multilineTextAlignment) }
@@ -517,7 +518,9 @@ final class _RichTextNode: _Node {
             func flush(_ brk: Bool) {
                 if !word.isEmpty || !spaces.isEmpty || brk {
                     out.append(Piece(run: ri, text: word, width: _RichTextNode.width(word, r), hasBreak: brk,
-                                     trailingSpace: spaces.isEmpty ? 0 : _RichTextNode.width("x" + spaces, r) - _RichTextNode.width("x", r), start: wordStart))
+                                     // between two letters (a label's width leaves out trailing spaces, as on iOS), against the same two letters
+                                     // without them: one rounding on each side, not two on one
+                                     trailingSpace: spaces.isEmpty ? 0 : _RichTextNode.width("x" + spaces + "x", r) - _RichTextNode.width("xx", r), start: wordStart))
                 }
                 word = ""; spaces = ""
             }
@@ -551,7 +554,7 @@ final class _RichTextNode: _Node {
         let heights = lines.map { l in l.map { lineHeight(runs[pieces[$0].run]) }.max() ?? (runs.first.map { lineHeight($0) } ?? 20) }
         return (lines, widths, heights)
     }
-    override func sizeThatFits(_ p: _Proposal) -> CGSize {
+    override func _measure(_ p: _Proposal) -> CGSize {
         let mw = p.width.flatMap { $0 >= 1e6 ? nil : $0 }
         let (_, widths, heights) = layout(mw)
         var h = heights.reduce(0, +)
@@ -618,14 +621,16 @@ final class _SUIRichLabel: UILabel {
             }
             if r.kerning != 0 {
                 // characters one by one, spaced by the kerning
-                var x = p.frame.minX
+                // each at the width of the text before it (pair kerning kept, no rounding piling up)
+                var prefix = ""
                 for ch in p.text {
                     let s = String(ch)
+                    let x = p.frame.minX + _RichTextNode.width(prefix, r)
                     let l = UILabel(frame: CGRect(x: x, y: p.frame.minY, width: ceil(_RichTextNode.width(s, r) - r.kerning) + 1, height: p.frame.height))
                     l.text = s; l.font = r.font; l.textColor = r.color
                     if r.italic { l.transform = CGAffineTransform(a: 1, b: 0, c: -0.2, d: 1, tx: 0, ty: 0) }
                     addSubview(l)
-                    x += _RichTextNode.width(s, r)
+                    prefix.append(ch)
                 }
             } else {
                 let l = UILabel(frame: p.frame)

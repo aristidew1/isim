@@ -504,6 +504,10 @@ static struct image *map_image(const char *path, int want_type) {
     if (isim_verbose) fprintf(stderr, "isim: mapped %s at %p\n", im->path, im->base);
     if (nimages >= MAX_IMAGES) isim_fatal("too many images");
     images[nimages++] = im;
+    {   /* profiling: ISIM_IMAGE_LIST=FILE lists the loaded images (path, slide, base, span) so a perf map can be built */
+        const char *l = getenv("ISIM_IMAGE_LIST"); FILE *f = l && *l ? fopen(l, "a") : NULL;
+        if (f) { fprintf(f, "%s\t%llx\t%llx\t%llx\n", im->path, (unsigned long long)im->slide, (unsigned long long)(uintptr_t)im->base, (unsigned long long)im->span); fclose(f); }
+    }
     return im;
 }
 
@@ -1096,6 +1100,15 @@ static void *dump_thread(void *arg) {
     return NULL;
 }
 void isim_dump_all_threads(void) { if (dump_sig) sem_post(&dump_sem); }
+/* a poor man's sampling profiler: ISIM_SAMPLE_MS=N prints every thread's stack every N ms (aggregate the [main] frames) */
+static void *sample_thread(void *arg) {
+    int ms = (int)(intptr_t)arg;
+    pthread_setname_np(pthread_self(), "isim-sampler");
+    const char *after = getenv("ISIM_SAMPLE_AFTER");       /* seconds to wait first (the launch is not sampled) */
+    if (after && atof(after) > 0) usleep((useconds_t)(atof(after) * 1e6));
+    for (;;) { usleep((useconds_t)ms * 1000); isim_dump_all_threads(); }
+    return NULL;
+}
 static void install_stack_dumper(void) {
     if (getenv("ISIM_NO_STACK_DUMP") || pipe2(dump_pipe, O_CLOEXEC | O_NONBLOCK)) return;
     fcntl(dump_pipe[1], F_SETPIPE_SZ, 4096);
@@ -1107,6 +1120,8 @@ static void install_stack_dumper(void) {
     pthread_t t;
     if (pthread_create(&t, NULL, dump_thread, NULL)) { dump_sig = 0; return; }
     pthread_detach(t);
+    const char *sm = getenv("ISIM_SAMPLE_MS");
+    if (sm && atoi(sm) > 0 && !pthread_create(&t, NULL, sample_thread, (void *)(intptr_t)atoi(sm))) pthread_detach(t);
 }
 
 /* one thread's stack (MetricKit hang diagnostics): signal it and take the pcs its handler collects */
@@ -1331,14 +1346,26 @@ static void install_crash_handler(void) {
     sigaction(SIGFPE, &sa, NULL); sigaction(SIGTRAP, &sa, NULL); sigaction(SIGABRT, &sa, NULL);
 }
 
-#define D(n, f) { n, (void *)f, "isim" }
+#define D(n, f) { n, (void *)f, "isim" }/* the bytes of a whole segment (the Kotlin/Native runtime reads __DATA to find its globals) */
+static uint8_t *d_getsegmentdata(const void *mh, const char *segname, unsigned long *size) {
+    struct image *im = image_for_header(mh);
+    *size = 0;
+    if (!im) return NULL;
+    for (int i = 0; i < im->nsegs; i++)
+        if (!strncmp(im->segs[i]->segname, segname, 16)) {
+            *size = im->segs[i]->vmsize;
+            return (uint8_t *)(uintptr_t)(im->segs[i]->vmaddr + im->slide);
+        }
+    return NULL;
+}
+
 static const struct shim dyld_table[] = {
     D("__dyld_image_count", d_dyld_image_count), D("__dyld_get_image_header", d_dyld_get_image_header),
     D("__dyld_get_image_vmaddr_slide", d_dyld_get_image_vmaddr_slide), D("__dyld_get_image_name", d_dyld_get_image_name),
     D("__dyld_register_func_for_add_image", d_dyld_register_func_for_add_image),
     D("__dyld_register_func_for_remove_image", d_dyld_register_func_for_remove_image),
     D("__dyld_is_objc_constant", d_dyld_is_objc_constant), D("_dyld_image_path_containing_address", d_dyld_image_path_containing_address),
-    D("__dyld_is_memory_immutable", d_dyld_is_memory_immutable), D("_getsectiondata", d_getsectiondata),
+    D("__dyld_is_memory_immutable", d_dyld_is_memory_immutable), D("_getsectiondata", d_getsectiondata), D("_getsegmentdata", d_getsegmentdata),
     D("_dlsym", d_dlsym), D("_dlopen", d_dlopen), D("_dlclose", d_dlclose), D("_dlerror", d_dlerror), D("_dladdr", d_dladdr),
     D("_dlopen_preflight", d_dlopen_preflight), D("_backtrace", d_backtrace), D("_backtrace_symbols", d_backtrace_symbols),
     D("_backtrace_symbols_fd", d_backtrace_symbols_fd),

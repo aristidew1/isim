@@ -101,7 +101,7 @@ final class _RowEditNode: _WrapperNode {
     var container: _SwipeContainerBox?
     override init(path: String, child: _Node) { super.init(path: path, child: child); tag = child.tag }
     override var layoutPriority: Double { child.layoutPriority }
-    override func sizeThatFits(_ p: _Proposal) -> CGSize { child.sizeThatFits(p) }
+    override func _measure(_ p: _Proposal) -> CGSize { child.sizeThatFits(p) }
     override func place(_ rect: CGRect) { frame = rect; child.place(CGRect(origin: .zero, size: rect.size)) }
     override func mountView(_ g: _Graph) -> UIView {
         guard standalone, (leading?.isEmpty == false || trailing?.isEmpty == false) else { return g.view(viewKey) { _PassthroughView() } }
@@ -218,7 +218,7 @@ final class _ContextMenuNode: _WrapperNode {
     var preview: (() -> UIView)?
     init(path: String, build: @escaping () -> UIMenu, child: _Node) { self.build = build; super.init(path: path, child: child) }
     override var layoutPriority: Double { child.layoutPriority }
-    override func sizeThatFits(_ p: _Proposal) -> CGSize { child.sizeThatFits(p) }
+    override func _measure(_ p: _Proposal) -> CGSize { child.sizeThatFits(p) }
     override func place(_ rect: CGRect) { frame = rect; child.place(CGRect(origin: .zero, size: rect.size)) }
     override func mountView(_ g: _Graph) -> UIView {
         let v = g.view(viewKey) { _SUIContextMenuHost(frame: .zero) }

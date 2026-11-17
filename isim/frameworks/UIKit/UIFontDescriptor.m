@@ -142,6 +142,17 @@ static UIFont *font_for_family(NSString *family, CGFloat size) {
     if (!f && name.length) f = [UIFont fontWithName:name size:s];
     if (!f && family.length) f = font_for_family(family, s);
     if (!f) f = [UIFont systemFontOfSize:s];
+    NSDictionary *vars = [a[@"NSCTFontVariationAttribute"] isKindOfClass:NSDictionary.class] ? a[@"NSCTFontVariationAttribute"] : nil;
+    if (vars.count && f._isim_family) {                 /* a variable font's axes: four-letter tags as numbers */
+        NSMutableArray *parts = [NSMutableArray array];
+        for (NSNumber *k in [vars.allKeys sortedArrayUsingSelector:@selector(compare:)]) {
+            if (![k isKindOfClass:NSNumber.class] || ![vars[k] isKindOfClass:NSNumber.class]) continue;
+            uint32_t t = k.unsignedIntValue;
+            char tag[5] = { (char)(t >> 24), (char)(t >> 16), (char)(t >> 8), (char)t, 0 };
+            [parts addObject:[NSString stringWithFormat:@"%s=%g", tag, [vars[k] doubleValue]]];
+        }
+        f = [f _isim_withVariations:[parts componentsJoinedByString:@","]];
+    }
     NSDictionary *traits = [a[UIFontDescriptorTraitsAttribute] isKindOfClass:NSDictionary.class] ? a[UIFontDescriptorTraitsAttribute] : nil;
     NSNumber *sym = traits[UIFontSymbolicTrait], *weight = traits[UIFontWeightTrait];
     NSString *design = traits[kDesignTrait];
