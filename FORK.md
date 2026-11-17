@@ -7,11 +7,11 @@ Ce dépôt est un fork de [kolabs-dev/isim](https://github.com/kolabs-dev/isim).
 | Élément | Valeur |
 |---|---|
 | Base | `v0.36.0` (`a9d8a1b8`) |
-| Branche de travail | `vielift` |
+| Branche de travail | `main` (le travail du fork, posé sur la base) |
 | Remote `origin` | `https://github.com/kolabs-dev/isim` (dépôt d'origine, lecture seule) |
 | Remote `fork` | `git@github.com:aristidew1/isim.git` (ce fork) |
 
-La branche `vielift` suit `fork/vielift` : un simple `git push` envoie sur le fork.
+La branche `main` suit `fork/main` : un simple `git push` envoie sur le fork.
 
 Pour récupérer une nouvelle version du dépôt d'origine :
 
