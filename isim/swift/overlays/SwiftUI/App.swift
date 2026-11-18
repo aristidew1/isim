@@ -177,9 +177,14 @@ final class _SUIHostView: UIView {
         backgroundColor = .systemBackground
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+    /// what the last layout used: a change lays the whole graph out again (scoped updates otherwise)
+    private var laidOutBounds: CGRect?
+    private var traitsChanged = true
     override func layoutSubviews() {
         super.layoutSubviews()
-        graph.render(bounds: bounds, safeArea: safeAreaInsets, traits: traitCollection)
+        let changed = traitsChanged || laidOutBounds != bounds
+        traitsChanged = false; laidOutBounds = bounds
+        graph.layout(bounds: bounds, safeArea: safeAreaInsets, traits: traitCollection, inputsChanged: changed)
         if intrinsicAsked {                                     // the content may have a new ideal size
             let old = intrinsic
             intrinsic = nil
@@ -187,7 +192,7 @@ final class _SUIHostView: UIView {
         }
         afterRender?()
     }
-    override func traitCollectionDidChange(_ previous: UITraitCollection?) { setNeedsLayout() }
+    override func traitCollectionDidChange(_ previous: UITraitCollection?) { traitsChanged = true; setNeedsLayout() }
 
     // sizing: the content's ideal size, like iOS's hosting view (Auto Layout, UIStackView, sizeToFit)
     private var intrinsic: CGSize?

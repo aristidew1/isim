@@ -440,8 +440,9 @@ void (*isim_ui_appearance_hook)(UIView *v);          /* UIAppearance.m: proxies 
 - (void)addSubview:(UIView *)v { [self insertSubview:v atIndex:(NSInteger)_subs.count + (v.superview == self ? -1 : 0)]; }
 - (void)insertSubview:(UIView *)v belowSubview:(UIView *)s { NSUInteger i = [_subs indexOfObjectIdenticalTo:s]; [self insertSubview:v atIndex:i == NSNotFound ? 0 : (NSInteger)i]; }
 - (void)insertSubview:(UIView *)v aboveSubview:(UIView *)s { NSUInteger i = [_subs indexOfObjectIdenticalTo:s]; [self insertSubview:v atIndex:i == NSNotFound ? (NSInteger)_subs.count : (NSInteger)i + 1]; }
-- (void)bringSubviewToFront:(UIView *)v { if ([_subs indexOfObjectIdenticalTo:v] != NSNotFound) { [_subs removeObjectIdenticalTo:v]; [_subs addObject:v]; isim_ui_set_needs_display(); } }
-- (void)sendSubviewToBack:(UIView *)v { if ([_subs indexOfObjectIdenticalTo:v] != NSNotFound) { [_subs removeObjectIdenticalTo:v]; [_subs insertObject:v atIndex:0]; isim_ui_set_needs_display(); } }
+/* (already in place: nothing changes on screen, no frame) */
+- (void)bringSubviewToFront:(UIView *)v { if (v && _subs.lastObject != v && [_subs indexOfObjectIdenticalTo:v] != NSNotFound) { [_subs removeObjectIdenticalTo:v]; [_subs addObject:v]; isim_ui_set_needs_display(); } }
+- (void)sendSubviewToBack:(UIView *)v { if (v && _subs.firstObject != v && [_subs indexOfObjectIdenticalTo:v] != NSNotFound) { [_subs removeObjectIdenticalTo:v]; [_subs insertObject:v atIndex:0]; isim_ui_set_needs_display(); } }
 - (void)exchangeSubviewAtIndex:(NSInteger)a withSubviewAtIndex:(NSInteger)b { [_subs exchangeObjectAtIndex:(NSUInteger)a withObjectAtIndex:(NSUInteger)b]; isim_ui_set_needs_display(); }
 - (void)removeFromSuperview {
     UIView *sup = _superview;
@@ -1501,7 +1502,10 @@ typedef struct {
     double kfBase, kfTotal;
     __unsafe_unretained id group;
 } anim_track;
-struct anim_state { anim_track t[AK_COUNT]; };
+struct anim_state {
+    anim_track t[AK_COUNT];
+    CGRect drawn; BOOL hasDrawn;            /* where the last frame drew the view and its subviews (screen points) */
+};
 
 @interface __IsimTimeline : NSObject {
 @public
@@ -1672,6 +1676,51 @@ static BOOL kf_eval(anim_track *t, double now) {
 static BOOL timeline_running(__IsimTimeline *tl) { return tl && !tl->paused && !tl->done; }
 static void timeline_finish(__IsimTimeline *tl, int position);
 
+/* Partial frames while UIView animations run: an animating view damages where the last frame drew it and where it is
+   now, its subviews with it, in screen points (with a margin for shadows and blurs). CGRectNull when that is not
+   known: not in a window, or an animating ancestor moves it too (then a whole frame). */
+static CGRect anim_view_extent(UIView *v) {
+    UIWindow *w = v.window; UIView *sup = v.superview;
+    if (!w || !sup) return CGRectNull;
+    for (UIView *a = sup; a; a = a.superview) if (a->_anim && [animating indexOfObjectIdenticalTo:a] != NSNotFound) return CGRectNull;
+    CGRect b = v.bounds, ext = b;
+    NSMutableArray<UIView *> *stack = [v.subviews mutableCopy];        /* the subtree, in the view's coordinates */
+    while (stack.count) {
+        UIView *d = stack.lastObject; [stack removeLastObject];
+        if (d.hidden) continue;
+        ext = CGRectUnion(ext, [d convertRect:d.bounds toView:v]);
+        [stack addObjectsFromArray:d.subviews];
+    }
+    /* the in-flight frame (the transform's bounding box), the subtree's overhang scaled with it */
+    CGRect f = [v _isim_presentedFrame:NULL radius:NULL];
+    double sx = b.size.width > 0 ? f.size.width / b.size.width : 1, sy = b.size.height > 0 ? f.size.height / b.size.height : 1;
+    double l = CGRectGetMinX(b) - CGRectGetMinX(ext), t = CGRectGetMinY(b) - CGRectGetMinY(ext);
+    double r = CGRectGetMaxX(ext) - CGRectGetMaxX(b), bo = CGRectGetMaxY(ext) - CGRectGetMaxY(b);
+    double xt[6]; CGAffineTransform tr = v.transform;
+    if (anim_presentation(v, AK_TRANSFORM, xt)) tr = (CGAffineTransform){ xt[0], xt[1], xt[2], xt[3], xt[4], xt[5] };
+    CGRect R;
+    if (fabs(tr.b) > 1e-9 || fabs(tr.c) > 1e-9) {                     /* rotated: the overhang may point anywhere */
+        double m = fmax(fmax(l, t), fmax(r, bo)) * fmax(sx, sy) * 1.5;
+        R = CGRectInset(f, -m, -m);
+    } else R = CGRectMake(f.origin.x - l * sx, f.origin.y - t * sy, f.size.width + (l + r) * sx, f.size.height + (t + bo) * sy);
+    R = [sup convertRect:R toView:nil];
+    R = CGRectOffset(R, w.frame.origin.x, w.frame.origin.y);
+    CALayer *ly = v.layer;
+    double shadow = ly.shadowOpacity > 0 ? ly.shadowRadius * 3 + fmax(fabs(ly.shadowOffset.width), fabs(ly.shadowOffset.height)) : 0;
+    double margin = fmax(48, shadow + 8);
+    return CGRectInset(R, -margin, -margin);
+}
+
+static BOOL anim_frame_tick;   /* the tick is the one of a frame being drawn: its values are what the frame shows */
+
+/* the tick of a frame: what the animations move is that frame's region (a whole frame when not known) */
+BOOL isim_ui_animations_frame_tick(void) {
+    anim_frame_tick = YES;
+    BOOL r = isim_ui_animations_tick();
+    anim_frame_tick = NO;
+    return r;
+}
+
 /* evaluates every running track; returns YES while any animation is running */
 BOOL isim_ui_animations_tick(void) {
     /* timelines that reached their end (or their start, reversed) finish themselves */
@@ -1683,7 +1732,7 @@ BOOL isim_ui_animations_tick(void) {
     }
     if (!animating.count) { for (__IsimTimeline *tl in timelines) if (timeline_running(tl)) return YES; return NO; }
     double real = isim_time();
-    BOOL any = NO;
+    BOOL any = NO, whole = NO;
     for (UIView *v in [animating copy]) {
         BOOL viewActive = NO;
         for (int k = 0; k < AK_COUNT; k++) {
@@ -1730,9 +1779,19 @@ BOOL isim_ui_animations_tick(void) {
                 if (!tl || timeline_running(tl)) any = YES;
             }
         }
-        if (!viewActive) [animating removeObjectIdenticalTo:v];
+        if (anim_frame_tick) {
+            /* the frame draws it here: that and where the last frame drew it is the region */
+            CGRect now = anim_view_extent(v);
+            if (CGRectIsNull(now) || !v->_anim->hasDrawn) whole = YES;
+            else {
+                CGRect d = CGRectUnion(now, v->_anim->drawn);
+                isim_ui_damage_rect(d.origin.x, d.origin.y, d.size.width, d.size.height);
+            }
+            v->_anim->drawn = now; v->_anim->hasDrawn = !CGRectIsNull(now);
+        } else if (!viewActive) whole = YES;   /* (ended between frames: no frame tick sees it again) */
+        if (!viewActive) { [animating removeObjectIdenticalTo:v]; v->_anim->hasDrawn = NO; }
     }
-    isim_ui_set_needs_display();
+    if (whole) isim_ui_set_needs_display();
     for (__IsimTimeline *tl in timelines) if (timeline_running(tl)) any = YES;
     return any;
 }

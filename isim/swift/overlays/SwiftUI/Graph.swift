@@ -135,6 +135,9 @@ extension CGSize { subscript(axis: Axis) -> CGFloat { axis == .horizontal ? widt
     var transitions: [String: AnyTransition] = [:]         // view key -> its .transition (for removal)
     var fresh: Set<ObjectIdentifier> = []                   // views created during this render
     var mountedViews: Set<ObjectIdentifier> = []
+    /// per parent whose children are mounting: the children in mount order, put in that order once they all are
+    /// (`_applyMountOrder`), so an unchanged order costs no reordering and no frame
+    var mountOrder: [ObjectIdentifier: [UIView]] = [:]
     var matchedFrames: [String: CGRect] = [:]               // matchedGeometryEffect id -> frame in the host view (last render)
     var newMatched: [String: CGRect] = [:]
     /// in an animated update: how far each moved view (with its ancestors) starts from where it ends, in window
@@ -155,9 +158,14 @@ extension CGSize { subscript(axis: Axis) -> CGFloat { axis == .horizontal ? widt
 
     // local refresh (LocalRefresh.swift): views that redraw on their own every frame or on a schedule (TimelineView,
     // in-flight animatable data) re-evaluate only their own subtree instead of the whole graph
-    var scopeStack: [(path: String, requested: Bool)] = []
+    var scopeStack: [(path: String, requested: Bool, animates: Bool)] = []
     var localScopes: [String: _LocalScope] = [:]
     var scopeByNode: [ObjectIdentifier: _LocalScope] = [:]
+    /// scoped updates: the scopes whose state changed since the last update, and whether anything asked for a whole
+    /// render (`invalidate()`) or the layout inputs changed; `scopePass` counts resolve passes
+    var dirtyScopes: Set<String> = []
+    var wholeDirty = true
+    var scopePass = 0
 
     // GeometryReader / onGeometryChange frames measured from the views (Geometry+Spaces.swift)
     var geometryReads: [String: (String, CoordinateSpace)] = [:]
@@ -175,6 +183,7 @@ extension CGSize { subscript(axis: Axis) -> CGFloat { axis == .horizontal ? widt
         }
         MainActor.assumeIsolated {
             onInvalidate?()
+            wholeDirty = true
             if rendering { pending = true; return }
             hostView?.setNeedsLayout()
         }
@@ -182,11 +191,20 @@ extension CGSize { subscript(axis: Axis) -> CGFloat { axis == .horizontal ? widt
 
     var renderCount = 0                                           // renders so far (the animation ticker waits for one)
 
+    /// The host view lays out: only the scopes whose state changed when nothing else did (the same bounds, safe area
+    /// and traits, no animated transaction), else the whole graph.
+    func layout(bounds: CGRect, safeArea: UIEdgeInsets, traits: UITraitCollection, inputsChanged: Bool) {
+        if _scopedUpdates && !wholeDirty && !inputsChanged && !dirtyScopes.isEmpty && renderCount > 0 &&
+            !_AnimationContext.hasPending && safeArea == self.safeArea && updateScopes() { return }
+        render(bounds: bounds, safeArea: safeArea, traits: traits)
+    }
+
     func render(bounds: CGRect, safeArea: UIEdgeInsets, traits: UITraitCollection) {
         _Node.layoutEpoch += 1
         renderCount += 1
         rendering = true
         defer { rendering = false }
+        wholeDirty = false; dirtyScopes = []; scopePass += 1
         self.safeArea = safeArea
         usedKeys = []; mountedKeys = []; usedChanges = []; usedTasks = []; usedAppear = []; postRender = []; focusLinks = []; submitActions = [:]; urlHandlers = [:]
         usedSubscriptions = []; idViews = [:]; geometryReads = [:]
@@ -229,7 +247,11 @@ extension CGSize { subscript(axis: Axis) -> CGFloat { axis == .horizontal ? widt
         for (k, t) in tasks where !usedTasks.contains(k) { t.cancel(); tasks[k] = nil }
         for k in subscriptions.keys where !usedSubscriptions.contains(k) { subscriptions[k] = nil; receiveActions[k] = nil }
         for k in appeared where !usedAppear.contains(k) { appeared.remove(k); disappearActions.removeValue(forKey: k)?() }
-        localScopes = localScopes.filter { $0.value.renderStamp == renderCount }
+        localScopes = localScopes.filter {
+            if $0.value.renderStamp == renderCount { return true }
+            $0.value.token?.end()                                   // (gone: its tracking no longer counts)
+            return false
+        }
         scopeByNode = [:]
         let work = postRender
         postRender = []
@@ -394,7 +416,7 @@ extension CGSize { subscript(axis: Axis) -> CGFloat { axis == .horizontal ? widt
         if !scopeByNode.isEmpty, let s = scopeByNode.removeValue(forKey: ObjectIdentifier(node)) {
             let before = mountedKeys
             mount(node, in: parent, order: order)
-            s.keys = mountedKeys.subtracting(before)
+            s.keys = mountedKeys.subtracting(before); s.keysKnown = true
             return
         }
         if node is _GroupNode && !(node.children.isEmpty) && node.transparent {
@@ -403,7 +425,11 @@ extension CGSize { subscript(axis: Axis) -> CGFloat { axis == .horizontal ? widt
         }
         let v = node.mountView(self)
         mountedViews.insert(ObjectIdentifier(v))
-        if v.superview !== parent { parent.addSubview(v) } else { parent.bringSubviewToFront(v) }
+        // in mount order, in front of the views this pass does not mount (leaving ones): at once, or when the parent's
+        // children are all mounted
+        let pid = ObjectIdentifier(parent)
+        if v.superview !== parent { parent.addSubview(v) } else if mountOrder[pid] == nil { parent.bringSubviewToFront(v) }
+        if mountOrder[pid] != nil { mountOrder[pid]!.append(v) }
         let shift = originShift[ObjectIdentifier(parent)] ?? .zero
         if fresh.contains(ObjectIdentifier(v)) {
             // a new view: no animation from its initial (zero) state; the outermost new view plays its transition
@@ -459,7 +485,24 @@ extension CGSize { subscript(axis: Axis) -> CGFloat { axis == .horizontal ? widt
         // rotor entries find their elements by ForEach id or .id(_:) (Accessibility+More.swift)
         if let t = node.tag { axRotorTargets.views[t] = _AXRotorTargets.WeakBox(v) }
         if let i = node as? _IDNode { axRotorTargets.views[AnyHashable(i.idTag)] = _AXRotorTargets.WeakBox(v) }
+        let vid = ObjectIdentifier(v)
+        let outer = mountOrder.updateValue([], forKey: vid)
         node.mountChildren(self, in: v)
+        let order = mountOrder.removeValue(forKey: vid) ?? []
+        if let outer { mountOrder[vid] = outer }
+        _applyMountOrder(order, in: v)
+    }
+
+    /// Puts the children a pass mounted into `parent` in mount order, in front of its other subviews: what bringing
+    /// each to the front in turn does, without touching the subviews when they already are in that order.
+    func _applyMountOrder(_ order: [UIView], in parent: UIView) {
+        guard !order.isEmpty else { return }
+        var seen = Set<ObjectIdentifier>(), list: [UIView] = []
+        for v in order.reversed() where v.superview === parent && seen.insert(ObjectIdentifier(v)).inserted { list.append(v) }
+        list.reverse()
+        let subs = parent.subviews
+        if subs.count >= list.count && zip(subs.suffix(list.count), list).allSatisfy({ $0 === $1 }) { return }
+        for v in list { parent.bringSubviewToFront(v) }
     }
 }
 

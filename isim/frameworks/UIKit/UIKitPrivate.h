@@ -17,6 +17,7 @@
 void isim_ui_set_needs_display(void);
 void isim_ui_damage_begin(void);                              /* partial frames (UIGraphicsBase.m) */
 void isim_ui_damage_end(double x, double y, double w, double h);
+void isim_ui_damage_rect(double x, double y, double w, double h);   /* add a region to the next frame's */
 int isim_ui_take_damage(double *out);                       /* up to 8 rectangles (x, y, w, h) */
 @class UIView;
 void isim_ui_content_drop(UIView *v);                         /* content caches (UIView.m) */
@@ -345,6 +346,7 @@ void isim_ui_keyboard_install(void);
 void isim_ui_keyboard_check(void);
 /* view animations (UIView.m) */
 BOOL isim_ui_animations_tick(void);                      /* evaluates running animations; YES while any runs */
+BOOL isim_ui_animations_frame_tick(void);                /* the same for the frame being drawn: its region */
 BOOL isim_ui_animations_running(void);
 BOOL isim_ui_display_links_fire(void);                  /* CADisplayLink callbacks for this frame (UIMoreControls.m) */
 BOOL isim_ui_display_links_active(void);

@@ -525,31 +525,35 @@ public enum NavigationBarItem {
 
 /// Per navigation level: title, display mode, toolbar items (filled in while the level's content evaluates).
 @MainActor final class _NavLevel {
-    var title: String?
+    /// writes to what views put in the navigation bar, counted: a local refresh that writes any renders the whole
+    /// graph instead, which gathers them (LocalRefresh.swift)
+    static var writes = 0
+    var title: String? { didSet { Self.writes &+= 1 } }
     /// navigationSubtitle (iOS 26): under the large title, and under the inline title in the bar
-    var subtitle: String?
-    var displayMode: NavigationBarItem.TitleDisplayMode = .automatic
-    var toolbar: [(ToolbarItemPlacement, _Node)] = []
-    var contentIsList = false
-    var listColor: UIColor?                  // the list's background (listStyle, scrollContentBackground)
+    var subtitle: String? { didSet { Self.writes &+= 1 } }
+    var displayMode: NavigationBarItem.TitleDisplayMode = .automatic { didSet { Self.writes &+= 1 } }
+    var toolbar: [(ToolbarItemPlacement, _Node)] = [] { didSet { Self.writes &+= 1 } }
+    var contentIsList = false { didSet { Self.writes &+= 1 } }
+    var listColor: UIColor? { didSet { Self.writes &+= 1 } }                  // the list's background (listStyle, scrollContentBackground)
     var scrolledPastTitle = false
     // Navigation+More.swift / Search.swift
-    var destinations: [_NavDestination] = []
-    var barHidden = false
-    var barBackground: Color?
-    var barBackgroundVisibility: Visibility = .automatic
-    var barScheme: ColorScheme?
-    var search: _SearchConfig?
+    var destinations: [_NavDestination] = [] { didSet { Self.writes &+= 1 } }
+    var barHidden = false { didSet { Self.writes &+= 1 } }
+    var barBackground: Color? { didSet { Self.writes &+= 1 } }
+    var barBackgroundVisibility: Visibility = .automatic { didSet { Self.writes &+= 1 } }
+    var barScheme: ColorScheme? { didSet { Self.writes &+= 1 } }
+    var search: _SearchConfig? { didSet { Self.writes &+= 1 } }
     // NavigationTransitions.swift: back button, title menu, toolbar role, bottom bar, push transition
-    var backHidden = false
-    var titleMenu: (() -> UIMenu)?
-    var role = 0
-    var bottomBarHidden = false
-    var bottomBarBackground: Color?
-    var transition: _NavTransition = .push
-    var edgeTop = 0, edgeBottom = 0          // scrollEdgeEffectStyle: 0 automatic, 1 hard, 2 soft, 3 hidden
-    var minimizeBottom = 0                   // toolbarMinimizationBehavior for the bottom bar: 2 on scroll down, 3 on scroll up
-    var minimizeTop = 0                      //   … and for the navigation bar
+    var backHidden = false { didSet { Self.writes &+= 1 } }
+    var titleMenu: (() -> UIMenu)? { didSet { Self.writes &+= 1 } }
+    var role = 0 { didSet { Self.writes &+= 1 } }
+    var bottomBarHidden = false { didSet { Self.writes &+= 1 } }
+    var bottomBarBackground: Color? { didSet { Self.writes &+= 1 } }
+    var transition: _NavTransition = .push { didSet { Self.writes &+= 1 } }
+    var edgeTop = 0 { didSet { Self.writes &+= 1 } }                        // scrollEdgeEffectStyle: 0 automatic, 1 hard, 2 soft, 3 hidden
+    var edgeBottom = 0 { didSet { Self.writes &+= 1 } }
+    var minimizeBottom = 0 { didSet { Self.writes &+= 1 } }                 // toolbarMinimizationBehavior for the bottom bar: 2 on scroll down, 3 on scroll up
+    var minimizeTop = 0 { didSet { Self.writes &+= 1 } }                    //   … and for the navigation bar
     var hasBottomBar: Bool { !bottomBarHidden && toolbar.contains { $0.0.isBottom } }
     var hasPrincipal: Bool { toolbar.contains { $0.0.id == 1 } }
     let index: Int

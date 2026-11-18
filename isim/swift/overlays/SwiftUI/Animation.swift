@@ -181,6 +181,10 @@ public struct Spring: Hashable, Sendable {
         guard let a = pending, Date().timeIntervalSinceReferenceDate - pendingStamp < 1 else { return nil }
         return a
     }
+    /// a withAnimation / withTransaction waits for the next render (scoped updates leave it to a whole render)
+    static var hasPending: Bool {
+        (pending != nil || pendingTransaction != nil) && Date().timeIntervalSinceReferenceDate - pendingStamp < 1
+    }
     /// the transaction for the render happening now (withTransaction's, else one with the animation)
     static func takeTransaction(_ animation: Animation?) -> Transaction {
         defer { pendingTransaction = nil }

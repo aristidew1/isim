@@ -1330,6 +1330,7 @@ static void handle_id_touch(const struct isim_event *ev) {
 static void render_frame_in(const double *partial, int n);
 static void layout_all(void);
 static void render_frame(void) { render_frame_in(NULL, 0); }
+static BOOL anim_pre_ticked;            /* render_pending_frame ticked the animations for the frame it draws */
 /* a whole frame when something asked for one, else only the region a known change touched (isim_ui_damage_end) */
 static void render_pending_frame(void) {
     extern int isim_ui_frame_stats; extern void isim_ui_frame_stats_report(int, int, double);
@@ -1340,8 +1341,14 @@ static void render_pending_frame(void) {
         if (t - stats_t >= 1) { isim_ui_frame_stats_report(n_full, n_part, n_part ? area_sum / n_part : 0); n_full = n_part = 0; area_sum = 0; stats_t = t; }
     }
     double r[4 * 8]; int n;
+    /* UIView animations advance first, so what they move is part of this frame's region (or makes it whole); with
+       display links running the frame is whole anyway and they tick in their usual place, after the links */
+    anim_pre_ticked = NO;
+    if (!isim_ui_display_links_active() && !isim_ui_update_links_active() && isim_ui_animations_running()) {
+        isim_ui_animations_frame_tick(); anim_pre_ticked = YES;
+    }
     if (isim_ui_take_display()) { isim_ui_take_damage(NULL); layout_all(); render_frame(); n_full++; return; }
-    if (!(n = isim_ui_take_damage(r))) return;
+    if (!(n = isim_ui_take_damage(r))) { anim_pre_ticked = NO; return; }
     layout_all();
     if (isim_ui_take_display()) { isim_ui_take_damage(NULL); render_frame(); n_full++; return; }   /* the layout changed more */
     render_frame_in(r, n);
@@ -1356,7 +1363,8 @@ static void render_frame_in(const double *partial, int n) {
     isim_ui_update_links_fire();                      /* UIUpdateLink (UIUpdates.m): the phases before the display links */
     isim_ui_display_links_fire();
     { extern void isim_ui_update_links_stage(int); isim_ui_update_links_stage(1); }   /* after them, before the commit */
-    isim_ui_animations_tick();
+    if (!anim_pre_ticked) isim_ui_animations_frame_tick();
+    anim_pre_ticked = NO;
     UIWindow *key = top_window();
     extern UIViewController *isim_ui_status_bar_owner(UIViewController *, BOOL);   /* UIViewControllerExtras.m */
     UIViewController *vc = isim_ui_status_bar_owner(key.rootViewController, NO), *hider = isim_ui_status_bar_owner(key.rootViewController, YES);
@@ -2066,7 +2074,10 @@ static void run_loop_once(void) {
         if (tm.tm_min != last_minute) { last_minute = tm.tm_min; isim_ui_set_needs_display(); }
         if (!backgrounded) render_pending_frame(); else { isim_ui_take_display(); isim_ui_take_damage(NULL); }
         double timeout = next < 0.5 ? next : 0.5;
-        if ((isim_ui_animations_running() || isim_ui_display_links_active() || isim_ui_update_links_active()) && !backgrounded) { isim_ui_set_needs_display(); if (timeout > 1.0 / 60) timeout = 1.0 / 60; }
+        /* display links draw what they like: a whole frame each time; UIView animations damage what they move (their
+           frame tick, in render_pending_frame) */
+        BOOL links = isim_ui_display_links_active() || isim_ui_update_links_active();
+        if ((links || isim_ui_animations_running()) && !backgrounded) { if (links) isim_ui_set_needs_display(); if (timeout > 1.0 / 60) timeout = 1.0 / 60; }
         { extern double isim_main_next_due(void); double due = isim_main_next_due(); if (due < timeout) timeout = due; }   /* blocks queued while rendering run right away */
         if (holding && timeout > 0.05) timeout = 0.05;
         struct isim_event ev;

@@ -12,9 +12,11 @@ BOOL isim_ui_in_layout;
    (the callers' return addresses: a perf map built from ISIM_IMAGE_LIST names them) */
 int isim_ui_frame_stats = -1;
 static struct { void *ra; int n; } fs_callers[48];
+static int damage_depth;                       /* > 0 between isim_ui_damage_begin and _end (partial frames, below) */
 static void fs_note(void *ra) {
     if (isim_ui_frame_stats < 0) { const char *e = getenv("ISIM_FRAME_STATS"); isim_ui_frame_stats = e && atoi(e) > 0; }
-    if (!isim_ui_frame_stats || needs_display) return;          /* the first request of a frame only */
+    /* the first request of a frame only; inside a damage bracket a request adds to the region, it is no whole frame */
+    if (!isim_ui_frame_stats || needs_display || damage_depth) return;
     for (int i = 0; i < 48; i++) {
         if (fs_callers[i].ra == ra) { fs_callers[i].n++; return; }
         if (!fs_callers[i].ra) { fs_callers[i].ra = ra; fs_callers[i].n = 1; return; }
@@ -34,7 +36,7 @@ BOOL isim_ui_take_display(void) { BOOL d = needs_display; needs_display = NO; re
    of the screen (SwiftUI's local refresh of a TimelineView or an animating shape): when nothing else asked for a frame,
    only that region is drawn again (isim_frame_begin_rect). A display request inside the bracket with no region falls
    back to a whole frame. */
-static int damage_depth; static BOOL damage_saved_display;
+static BOOL damage_saved_display;
 /* the region: a few rectangles (separate changes stay separate rather than one box around them all); overlapping
    ones merge, and past ISIM_DAMAGE_MAX the closest pair merges */
 #define ISIM_DAMAGE_MAX 8
@@ -67,6 +69,11 @@ void isim_ui_damage_end(double x, double y, double w, double h) {
         else damage_saved_display = YES;
     }
     needs_display = damage_saved_display;
+}
+/* a region the next frame draws again (screen points): what an animation tick moved (UIView.m) */
+void isim_ui_damage_rect(double x, double y, double w, double h) {
+    if (w > 0 && h > 0 && isfinite(x) && isfinite(y) && isfinite(w) && isfinite(h)) damage_add(CGRectMake(x, y, w, h));
+    else isim_ui_set_needs_display();
 }
 /* the region changed since the last frame (up to ISIM_DAMAGE_MAX rectangles, as x, y, w, h); taken: the next frame
    starts with none. Returns how many. */
@@ -535,7 +542,8 @@ static BOOL ios_builtin_family(NSString *name, BOOL *mono) {
 - (BOOL)_isim_tabular { return _tabular; }
 - (NSString *)_isim_design { return _design; }
 - (id)copyWithZone:(NSZone *)z { return self; }
-- (BOOL)isEqual:(UIFont *)o { return [o isKindOfClass:[UIFont class]] && o->_size == _size && o->_weight == _weight && o->_mono == _mono && o->_italic == _italic && o->_tabular == _tabular && (o->_family == _family || [o->_family isEqualToString:_family]) && (o->_variations == _variations || [o->_variations isEqualToString:_variations]); }
+- (BOOL)isEqual:(UIFont *)o { return [o isKindOfClass:[UIFont class]] && o->_size == _size && o->_weight == _weight && o->_mono == _mono && o->_italic == _italic && o->_tabular == _tabular && (o->_family == _family || [o->_family isEqualToString:_family]) && (o->_variations == _variations || [o->_variations isEqualToString:_variations]) &&
+    (o->_name == _name || [o->_name isEqualToString:_name]) && (o->_design == _design || [o->_design isEqualToString:_design]); }   /* (the face and the design draw differently too) */
 - (NSUInteger)hash { return (NSUInteger)(_size * 100) ^ (NSUInteger)(_weight * 1000); }
 - (NSString *)description { return [NSString stringWithFormat:@"<UICTFont: %p> font-family: \"%@\"; font-weight: %g; font-size: %.2fpt", self, self.familyName, _weight, _size]; }
 @end

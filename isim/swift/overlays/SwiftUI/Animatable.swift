@@ -216,6 +216,8 @@ extension Animation {
         scopes = []
         var done: [String] = []
         for p in paths where !done.contains(where: { _LocalScope.isInside(p, $0) }) {
+            // out of sight (another page of a paged TabView, scrolled away): it refreshes once it shows again
+            if g._scopeOffscreen(p) { scopes.insert(p); done.append(p); continue }
             guard g.refreshLocal(p) else { fullFrame(g); return }
             done.append(p)
         }

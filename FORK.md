@@ -56,6 +56,20 @@ git push --force-with-lease
   - PNG en compression 1 ;
   - flou des ombres plus rapide.
 
+## Images partielles et mémo du texte (branche `perf/partial-frames-text-memo`)
+
+- **Images partielles** :
+  - le mount SwiftUI ne réordonne les sous-vues que si l'ordre change ;
+  - `bringSubviewToFront:` et `sendSubviewToBack:` ne font rien si la vue est déjà à sa place ;
+  - les animations UIView ne redessinent que la zone qu'elles touchent ;
+  - les scopes hors écran (pages cachées d'un `TabView`) ne sont plus ré-évalués ;
+  - le label de mesure du texte ne demande plus d'image.
+- **Mémo de la mise en page du texte** (`ISIM_TEXT_MEMO=0` pour le couper) : la taille des textes et la largeur des mots sont mises en cache. `UIFont isEqual:` compare aussi la face et le design.
+- **Invalidation SwiftUI par vue**, expérimentale et désactivée par défaut (`ISIM_SWIFTUI_SCOPED=1`) : suivi Observation isolé par vue (`_isim_observation_tls_swap` dans `observation-support.c`), et `@State` limité à la vue qui le porte.
+- `ISIM_FRAME_STATS` ne compte plus les demandes faites dans une zone de dommage.
+
+Mesures, analyse GPU et scripts : `perf-bench/` à côté du dépôt (RAPPORT.md, GPU.md).
+
 ## Construction
 
 Il faut LLVM 22, SDL3 et Swift 6.2.4. Exporter `PATH`, `PKG_CONFIG_PATH`, `LD_LIBRARY_PATH` et `CMAKE_PREFIX_PATH` vers LLVM et SDL3, ainsi que `ISIM_SWIFT_TOOLCHAIN` vers la toolchain Swift, puis lancer :
@@ -68,7 +82,7 @@ Les produits sont écrits dans `isim/out`. `out/bin/isim` a besoin des biblioth�
 
 ## État et reste à faire
 
-- [ ] **Relancer la suite de tests d'isim** ([docs/TESTING.md](docs/TESTING.md)) : elle n'a pas tourné depuis ces changements.
+- [ ] **Relancer toute la suite de tests d'isim** ([docs/TESTING.md](docs/TESTING.md)). Pour l'instant, seuls les tests UI liés à SwiftUI ont tourné : 137 passent, 3 échouent depuis `872a63e0` (`test_sheets` sur iPhone et iPad : la popover est adaptée en sheet ; `test_text_fidelity` : l'ombre `NSShadow` d'un label est absente). `test_drawing` est instable (environ 1 échec sur 15).
 - [ ] Proposer au dépôt d'origine les correctifs génériques, une PR par sujet, une fois les tests au vert.
 - [ ] Animations : l'arbre SwiftUI est entièrement recalculé à chaque image, ce qui prend plusieurs secondes par image. Les animations sont donc coupées pour l'instant (`ISIM_ANIMATIONS=0`).
 - [ ] Environ 40 % de processeur au repos.

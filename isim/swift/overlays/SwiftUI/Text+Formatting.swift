@@ -503,9 +503,13 @@ final class _RichTextNode: _Node {
     }
     static func width(_ s: String, _ r: _TextRun) -> CGFloat {
         if s.isEmpty { return 0 }
+        let key = _textMemo ? _TextWidthKey(text: s, font: r.font) : nil
+        if let key, let w = _textWidths[key] { return w + r.kerning * CGFloat(s.count) }
         let l = _measureLabel
         l.font = r.font; l.numberOfLines = 1; l.text = s
-        return l.sizeThatFits(CGSize(width: 0, height: 1e6)).width + r.kerning * CGFloat(s.count)
+        let w = l.sizeThatFits(CGSize(width: 0, height: 1e6)).width
+        if let key { _textMemoTrim(); _textWidths[key] = w }
+        return w + r.kerning * CGFloat(s.count)
     }
     func makePieces() -> [Piece] {
         // words keep their trailing spaces (measured separately so a line can end without them)

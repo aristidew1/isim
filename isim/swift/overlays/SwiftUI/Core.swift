@@ -159,11 +159,18 @@ func _typeName(_ t: Any.Type) -> String { String(describing: t) }
 @MainActor private func _resolveView(_ view: any View, _ ctx: _Context) -> _Node {
     let animatable = view as? any Animatable
     // views that may redraw on their own (in-flight animatable data, TimelineView) are local refresh scopes: a frame
-    // they ask for re-evaluates only them (LocalRefresh.swift)
-    guard animatable != nil || view is _LocalRefreshView else { return _resolveViewBody(view, ctx) }
-    ctx.graph._beginScope(ctx.path)
-    let n = _resolveViewBody(animatable.map { _animatableHook($0, view, ctx) } ?? view, ctx)   // (in-flight values)
-    ctx.graph._endScope(view, ctx, n)
+    // they ask for re-evaluates only them; views with a body are scopes for their state and what their body reads
+    // (LocalRefresh.swift)
+    let animates = animatable != nil || view is _LocalRefreshView
+    let g = ctx.graph
+    let body = _scopedUpdates && !g.measuring && !(view is _PrimitiveView) && !(view is any UIViewRepresentable) &&
+        !(view is any UIViewControllerRepresentable)
+    guard animates || body else { return _resolveViewBody(view, ctx) }
+    g._beginScope(ctx.path, animates: animates)
+    let v = animatable.map { _animatableHook($0, view, ctx) } ?? view           // (in-flight values)
+    let token = body ? _ScopeToken() : nil
+    let n = token.map { t in g._trackScope(ctx.path, t) { _resolveViewBody(v, ctx) } } ?? _resolveViewBody(v, ctx)
+    g._endScope(view, ctx, n, token: token)
     return n
 }
 @MainActor private func _resolveViewBody(_ view: any View, _ ctx: _Context) -> _Node {
@@ -212,20 +219,25 @@ class _AnyStorage {}
 
 @propertyWrapper
 public struct State<Value>: DynamicProperty, _DynamicProperty {
-    final class Box { var storage: _StateStorage<Value>?; var initial: Value; weak var graph: _Graph?; init(_ v: Value) { initial = v } }
+    final class Box {
+        var storage: _StateStorage<Value>?; var initial: Value; weak var graph: _Graph?
+        var owner: String?                      // the path of the view that owns it: a change re-evaluates that view
+        init(_ v: Value) { initial = v }
+        func changed() { if let o = owner { graph?.invalidate(scope: o) } else { graph?.invalidate() } }
+    }
     let box: Box
     public init(wrappedValue value: Value) { box = Box(value) }
     public init(initialValue value: Value) { box = Box(value) }
     public var wrappedValue: Value {
         get { box.storage?.value ?? box.initial }
         nonmutating set {
-            if let s = box.storage { s.value = newValue; box.graph?.invalidate() } else { box.initial = newValue }
+            if let s = box.storage { s.value = newValue; box.changed() } else { box.initial = newValue }
         }
     }
     public var projectedValue: Binding<Value> {
         let b = box
         return Binding(get: { b.storage?.value ?? b.initial }, set: { v in
-            if let s = b.storage { s.value = v; b.graph?.invalidate() } else { b.initial = v }
+            if let s = b.storage { s.value = v; b.changed() } else { b.initial = v }
         })
     }
     func _install(_ ctx: _Context, label: String) {
@@ -234,6 +246,7 @@ public struct State<Value>: DynamicProperty, _DynamicProperty {
         else { let s = _StateStorage(box.initial); ctx.graph.storage[key] = s; box.storage = s }
         ctx.graph.usedKeys.insert(key)
         box.graph = ctx.graph
+        box.owner = ctx.path
     }
 }
 extension State where Value: ExpressibleByNilLiteral {

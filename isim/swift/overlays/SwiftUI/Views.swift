@@ -381,7 +381,26 @@ public struct Text: View, Equatable, _PrimitiveView {
     func _makeNode(_ ctx: _Context) -> _Node { _makeTextNode(self, ctx) }
 }
 
-@MainActor let _measureLabel = UILabel()
+/// The label text is measured with. It is never on screen: what it is given asks for no layout and no frame.
+final class _SUIMeasureLabel: UILabel {
+    override func invalidateIntrinsicContentSize() {}
+    override func setNeedsDisplay() {}
+    override func setNeedsLayout() {}
+}
+@MainActor let _measureLabel: UILabel = _SUIMeasureLabel()
+
+/// Text measurement memo: what the measuring label answers depends only on the text, its font and the width offered,
+/// and every render measures every text again (rich text word by word). ISIM_TEXT_MEMO=0 turns it off.
+let _textMemo = ProcessInfo.processInfo.environment["ISIM_TEXT_MEMO"] != "0"
+struct _TextSizeKey: Hashable { let text: String; let font: UIFont; let maxLines: Int; let lineSpacing: CGFloat; let width: CGFloat }
+struct _TextWidthKey: Hashable { let text: String; let font: UIFont }
+@MainActor var _textSizes: [_TextSizeKey: CGSize] = [:]
+@MainActor var _textWidths: [_TextWidthKey: CGFloat] = [:]
+/// (bounded: a memo that only grows would hold every string the app ever showed)
+@MainActor func _textMemoTrim() {
+    if _textSizes.count > 20_000 { _textSizes.removeAll(keepingCapacity: true) }
+    if _textWidths.count > 50_000 { _textWidths.removeAll(keepingCapacity: true) }
+}
 final class _TextNode: _Node {
     let text: String, font: UIFont, color: UIColor, minLines: Int?, maxLines: Int?, alignment: TextAlignment
     var truncation = Text.TruncationMode.tail, minimumScale: CGFloat = 1, tightening = false
@@ -398,10 +417,22 @@ final class _TextNode: _Node {
         super.init(path: path, children: [])
     }
     override func _measure(_ p: _Proposal) -> CGSize {
+        let w = p.width ?? 1e6
+        let key = _textMemo ? _TextSizeKey(text: text, font: font, maxLines: maxLines ?? 0, lineSpacing: lineSpacing, width: min(w, 1e6)) : nil
+        var s: CGSize
+        if let key, let known = _textSizes[key] { s = known }
+        else {
+            s = _measureLabelSize(w)
+            if let key { _textMemoTrim(); _textSizes[key] = s }
+        }
+        if let mn = minLines { s.height = max(s.height, CGFloat(mn) * ceil(font.lineHeight)) }
+        return CGSize(width: ceil(s.width), height: ceil(s.height))
+    }
+    /// The size the label takes for a width (1e6: unbounded), before minLines.
+    private func _measureLabelSize(_ w: CGFloat) -> CGSize {
         let l = _measureLabel
         l.text = text; l.font = font; l.numberOfLines = maxLines ?? 0
         if let a = _spaced(text, align: .left) { l.attributedText = a }
-        let w = p.width ?? 1e6
         var s = l.sizeThatFits(CGSize(width: w >= 1e6 ? 0 : max(1, w), height: 1e6))
         if w < 1e6 {
             let natural = l.sizeThatFits(CGSize(width: 0, height: 1e6))
@@ -415,8 +446,7 @@ final class _TextNode: _Node {
                 s.height = max(s.height, again.height)
             }
         }
-        if let mn = minLines { s.height = max(s.height, CGFloat(mn) * ceil(font.lineHeight)) }
-        return CGSize(width: ceil(s.width), height: ceil(s.height))
+        return s
     }
     override func mountView(_ g: _Graph) -> UIView {
         let l = g.view(viewKey) { UILabel() }
