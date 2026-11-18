@@ -76,7 +76,12 @@ struct rt_class {
 #define ENTSIZE_MASK 0x0000fffcu
 
 static pthread_mutex_t rt_lock = PTHREAD_MUTEX_INITIALIZER;   /* metadata, caches */
-static pthread_mutex_t rr_lock = PTHREAD_MUTEX_INITIALIZER;   /* refcounts, weak table */
+/* refcounts, weak table. (A spinlock here instead, a little cheaper, made HelloToolchain's testAsyncFulfillment crash
+   on objc_retain((id)1): the other interleaving of threads exposes a race elsewhere. Keep the mutex until that is
+   understood.) */
+static pthread_mutex_t rr_lock = PTHREAD_MUTEX_INITIALIZER;
+static void rr_acquire(void) { pthread_mutex_lock(&rr_lock); }
+static void rr_release(void) { pthread_mutex_unlock(&rr_lock); }
 static pthread_mutex_t init_lock;                              /* recursive, +initialize */
 
 static struct class_ro_t *ro_of(Class c) { return (struct class_ro_t *)(c->data & FAST_DATA_MASK); }
@@ -160,28 +165,82 @@ static IMP find_own(Class c, SEL sel) {
 }
 
 /* ================= method cache ================= */
+/* Every message send looks its IMP up here, so a hit takes no lock: the cache is a seqlock. Writers (cache_put,
+   cache_flush, a resize) hold rt_lock and make cache_seq odd while they change the table; a reader reads it without
+   the lock and keeps what it found only if cache_seq was even and unchanged around the read, else it takes the
+   locked path. A resize publishes a new table (the capacity travels with it) and keeps the old one allocated, because
+   a reader may still be walking it: the tables only double, so what is kept stays under the size of the current one. */
 struct centry { Class cls; SEL sel; IMP imp; };
-static struct centry *cache; static size_t cache_cap, cache_n;
-static size_t chash(Class c, SEL s) { return (hash_ptr(c) ^ hash_ptr(s)) & (cache_cap - 1); }
-static void cache_put(Class c, SEL s, IMP imp) {
-    if (cache_n * 2 >= cache_cap) {
-        size_t ocap = cache_cap; struct centry *old = cache;
-        cache_cap = ocap ? ocap * 2 : 4096; cache = calloc(cache_cap, sizeof *cache); cache_n = 0;
-        for (size_t i = 0; i < ocap; i++) if (old[i].cls) cache_put(old[i].cls, old[i].sel, old[i].imp);
-        free(old);
-    }
-    size_t j = chash(c, s); while (cache[j].cls) j = (j + 1) & (cache_cap - 1);
-    cache[j] = (struct centry){ c, s, imp }; cache_n++;
+struct ctable { size_t cap; struct ctable *retired; struct centry e[]; };
+static struct ctable *ctab;                            /* the current table (atomic pointer) */
+static size_t cache_n;
+static unsigned long cache_seq;                        /* odd while a writer changes the table */
+static size_t chash(Class c, SEL s, size_t cap) { return (hash_ptr(c) ^ hash_ptr(s)) & (cap - 1); }
+static void cache_write_begin(void) {
+    __atomic_store_n(&cache_seq, cache_seq + 1, __ATOMIC_RELAXED);
+    __atomic_thread_fence(__ATOMIC_RELEASE);
 }
-static IMP cache_get(Class c, SEL s) {
-    if (!cache_cap) return NULL;
-    for (size_t j = chash(c, s); cache[j].cls; j = (j + 1) & (cache_cap - 1))
-        if (cache[j].cls == c && cache[j].sel == s) return cache[j].imp;
+static void cache_write_end(void) { __atomic_store_n(&cache_seq, cache_seq + 1, __ATOMIC_RELEASE); }
+static void cache_insert(struct ctable *t, Class c, SEL s, IMP imp) {   /* rt_lock held, inside a write */
+    size_t j = chash(c, s, t->cap); while (t->e[j].cls) j = (j + 1) & (t->cap - 1);
+    __atomic_store_n(&t->e[j].sel, s, __ATOMIC_RELAXED);
+    __atomic_store_n(&t->e[j].imp, imp, __ATOMIC_RELAXED);
+    __atomic_store_n(&t->e[j].cls, c, __ATOMIC_RELAXED);
+    cache_n++;
+}
+static void cache_put(Class c, SEL s, IMP imp) {        /* rt_lock held */
+    cache_write_begin();
+    struct ctable *t = ctab;
+    if (!t || cache_n * 2 >= t->cap) {
+        size_t cap = t ? t->cap * 2 : 4096;
+        struct ctable *n = calloc(1, sizeof *n + cap * sizeof n->e[0]);
+        n->cap = cap; n->retired = t; cache_n = 0;
+        if (t) for (size_t i = 0; i < t->cap; i++) if (t->e[i].cls) cache_insert(n, t->e[i].cls, t->e[i].sel, t->e[i].imp);
+        __atomic_store_n(&ctab, n, __ATOMIC_RELEASE);
+        t = n;
+    }
+    cache_insert(t, c, s, imp);
+    cache_write_end();
+}
+static IMP cache_get(Class c, SEL s) {                  /* rt_lock held */
+    struct ctable *t = ctab;
+    if (!t) return NULL;
+    for (size_t j = chash(c, s, t->cap); t->e[j].cls; j = (j + 1) & (t->cap - 1))
+        if (t->e[j].cls == c && t->e[j].sel == s) return t->e[j].imp;
     return NULL;
 }
-static void cache_flush(void) { if (cache) memset(cache, 0, cache_cap * sizeof *cache); cache_n = 0; }
+/* without the lock: NULL when the entry is missing or a writer got in the way (the caller then takes the lock) */
+static IMP cache_get_unlocked(Class c, SEL s) {
+    unsigned long seq = __atomic_load_n(&cache_seq, __ATOMIC_ACQUIRE);
+    if (seq & 1) return NULL;
+    struct ctable *t = __atomic_load_n(&ctab, __ATOMIC_ACQUIRE);
+    if (!t) return NULL;
+    IMP imp = NULL;
+    size_t mask = t->cap - 1, j = chash(c, s, t->cap);
+    for (size_t n = 0; n <= mask; n++, j = (j + 1) & mask) {    /* bounded: a torn read never loops */
+        Class k = __atomic_load_n(&t->e[j].cls, __ATOMIC_RELAXED);
+        if (!k) break;
+        if (k == c && __atomic_load_n(&t->e[j].sel, __ATOMIC_RELAXED) == s) { imp = __atomic_load_n(&t->e[j].imp, __ATOMIC_RELAXED); break; }
+    }
+    __atomic_thread_fence(__ATOMIC_ACQUIRE);
+    return __atomic_load_n(&cache_seq, __ATOMIC_RELAXED) == seq ? imp : NULL;
+}
+static void cache_flush(void) {                         /* rt_lock held */
+    struct ctable *t = ctab;
+    if (!t) return;
+    cache_write_begin();
+    for (size_t i = 0; i < t->cap; i++) {
+        __atomic_store_n(&t->e[i].cls, NULL, __ATOMIC_RELAXED);
+        __atomic_store_n(&t->e[i].sel, NULL, __ATOMIC_RELAXED);
+        __atomic_store_n(&t->e[i].imp, NULL, __ATOMIC_RELAXED);
+    }
+    cache_n = 0;
+    cache_write_end();
+}
 
 static IMP lookup_nofail(Class cls, SEL sel) {
+    IMP hit = cache_get_unlocked(cls, sel);
+    if (hit) return hit;
     pthread_mutex_lock(&rt_lock);
     IMP imp = cache_get(cls, sel);
     if (!imp) {
@@ -1139,13 +1198,20 @@ void objc_removeAssociatedObjects(id o) {
 
 /* ================= reference counting & weak references ================= */
 struct rcent { id obj; long extra; int deallocating; void ***weak; int nweak, weakcap; };
-static struct rcent *rc; static size_t rc_cap, rc_n;  /* open addressing with tombstones */
+static struct rcent *rc; static size_t rc_cap, rc_n;  /* open addressing with tombstones; rc_n counts them too */
+static size_t rc_live;                         /* entries that hold an object */
 #define TOMB ((id)1)
 static struct rcent *rc_find(id o, int create) {
     if (create && (rc_n + 1) * 2 >= rc_cap) {
         size_t ocap = rc_cap; struct rcent *old = rc;
-        rc_cap = ocap ? ocap * 2 : 1024; rc = calloc(rc_cap, sizeof *rc); rc_n = 0;
+        size_t live = rc_live;                 /* (moving entries does not change what they hold) */
+        /* Sized for the live entries alone (at most a quarter full), not twice the old size: objects die all the time
+           and leave tombstones, so doubling each time the tombstones filled the table made it grow without end, its
+           probes scattered over more and more memory and every new table was paged in again. */
+        size_t cap = 1024; while (cap < (live + 1) * 4) cap *= 2;
+        rc_cap = cap; rc = calloc(rc_cap, sizeof *rc); rc_n = 0;
         for (size_t i = 0; i < ocap; i++) if (old[i].obj && old[i].obj != TOMB) { struct rcent *e = rc_find(old[i].obj, 1); *e = old[i]; }
+        rc_live = live;
         free(old);
     }
     if (!rc_cap) return NULL;
@@ -1158,34 +1224,35 @@ static struct rcent *rc_find(id o, int create) {
     if (!create) return NULL;
     struct rcent *e = tomb ? tomb : &rc[j];
     if (!tomb) rc_n++;
+    rc_live++;
     memset(e, 0, sizeof *e); e->obj = o;
     return e;
 }
-static void rc_erase(struct rcent *e) { free(e->weak); memset(e, 0, sizeof *e); e->obj = TOMB; }
+static void rc_erase(struct rcent *e) { rc_live--; free(e->weak); memset(e, 0, sizeof *e); e->obj = TOMB; }
 
 static int is_class_object(id o) { return o->isa && o->isa->data && is_meta(o->isa); }
 
 id _objc_rootRetain(id o) {
     if (!o) return o;
-    pthread_mutex_lock(&rr_lock); rc_find(o, 1)->extra++; pthread_mutex_unlock(&rr_lock);
+    rr_acquire(); rc_find(o, 1)->extra++; rr_release();
     return o;
 }
 int _objc_rootReleaseWasZero(id o) {
-    pthread_mutex_lock(&rr_lock);
+    rr_acquire();
     struct rcent *e = rc_find(o, 1);
     int dealloc = 0;
-    if (e->deallocating) { pthread_mutex_unlock(&rr_lock); return 0; }
+    if (e->deallocating) { rr_release(); return 0; }
     if (e->extra > 0) e->extra--; else { e->deallocating = 1; dealloc = 1; }
-    pthread_mutex_unlock(&rr_lock);
+    rr_release();
     return dealloc;
 }
 void _objc_rootRelease(id o) { if (o && _objc_rootReleaseWasZero(o)) send0(o, s_dealloc); }
 unsigned long _objc_rootRetainCount(id o) {
-    pthread_mutex_lock(&rr_lock); struct rcent *e = rc_find(o, 0); long n = e ? e->extra : 0; pthread_mutex_unlock(&rr_lock);
+    rr_acquire(); struct rcent *e = rc_find(o, 0); long n = e ? e->extra : 0; rr_release();
     return n + 1;
 }
 int _objc_rootIsDeallocating(id o) {
-    pthread_mutex_lock(&rr_lock); struct rcent *e = rc_find(o, 0); int d = e && e->deallocating; pthread_mutex_unlock(&rr_lock);
+    rr_acquire(); struct rcent *e = rc_find(o, 0); int d = e && e->deallocating; rr_release();
     return d;
 }
 
@@ -1200,12 +1267,12 @@ static void weak_unregister(id o, id *loc) {
     for (int i = 0; i < e->nweak; i++) if (e->weak[i] == (void **)loc) { e->weak[i] = e->weak[--e->nweak]; return; }
 }
 id objc_storeWeak(id *loc, id val) {
-    pthread_mutex_lock(&rr_lock);
+    rr_acquire();
     if (*loc) weak_unregister(*loc, loc);
     if (val) { struct rcent *e = rc_find(val, 0); if (e && e->deallocating) val = NULL; }
     if (val && !is_class_object(val)) weak_register(val, loc);
     *loc = val;
-    pthread_mutex_unlock(&rr_lock);
+    rr_release();
     return val;
 }
 id objc_initWeak(id *loc, id val) { *loc = NULL; return objc_storeWeak(loc, val); }
@@ -1214,14 +1281,29 @@ id objc_retain(id o);
 id objc_autorelease(id o);
 /* does the object count its references in the side table (NSObject's -retain)? Swift objects and classes with their
    own -retain don't: those are retained by message */
+/* NSObject's own -retain / -release, as compiled (its base method list: neither a category nor a swizzle changes
+   it), which only call the root retain / release; both NULL until Foundation has registered NSObject */
+static IMP root_retain_imp, root_release_imp;
+static IMP root_retain(void) {
+    IMP r = __atomic_load_n(&root_retain_imp, __ATOMIC_RELAXED);
+    if (!r) {
+        Class ns = objc_getClass("NSObject");
+        if (!ns) return NULL;
+        IMP rel = find_in_list(ro_of(ns)->base_methods, s_release);
+        r = find_in_list(ro_of(ns)->base_methods, s_retain);
+        if (!r || !rel) r = rel = (IMP)1;      /* not found: never matches an IMP, and is not looked for again */
+        __atomic_store_n(&root_release_imp, rel, __ATOMIC_RELAXED);
+        __atomic_store_n(&root_retain_imp, r, __ATOMIC_RELEASE);
+    }
+    return r;
+}
 static int uses_root_retain(id o) {
-    static IMP root;
-    if (!root) { Class ns = objc_getClass("NSObject"); root = ns ? objc_rt_lookup((id)ns, ns, s_retain) : NULL; }
+    IMP root = root_retain();
     return root && objc_rt_lookup(o, o->isa, s_retain) == root;
 }
 id objc_loadWeakRetained(id *loc) {
     int by_message = 0;
-    pthread_mutex_lock(&rr_lock);
+    rr_acquire();
     id o = *loc;
     if (o) {
         struct rcent *e = rc_find(o, 0);
@@ -1230,7 +1312,7 @@ id objc_loadWeakRetained(id *loc) {
         else if (uses_root_retain(o)) rc_find(o, 1)->extra++;   /* inline root retain under the lock */
         else by_message = 1;
     }
-    pthread_mutex_unlock(&rr_lock);
+    rr_release();
     return by_message ? objc_retain(o) : o;
 }
 id objc_loadWeak(id *loc) { return objc_autorelease(objc_loadWeakRetained(loc)); }
@@ -1242,10 +1324,10 @@ void *objc_destructInstance(id o) {
     objc_removeAssociatedObjects(o);
     for (Class c = o->isa; c; c = c->superclass)
         if (c->rt && c->rt->cxx_destruct) ((void (*)(id, SEL))c->rt->cxx_destruct)(o, s_cxx_destruct);
-    pthread_mutex_lock(&rr_lock);
+    rr_acquire();
     struct rcent *e = rc_find(o, 0);
     if (e) { for (int i = 0; i < e->nweak; i++) *e->weak[i] = NULL; rc_erase(e); }
-    pthread_mutex_unlock(&rr_lock);
+    rr_release();
     return o;
 }
 id object_dispose(id o) { if (o) { objc_destructInstance(o); free(o); } return NULL; }
@@ -1256,9 +1338,24 @@ id class_createInstance(Class c, size_t extra) {
     return o;
 }
 
-/* ARC entry points: always dispatch through -retain/-release so classes may override them */
-id objc_retain(id o) { return o ? send0(o, s_retain) : o; }
-void objc_release(id o) { if (o) send0(o, s_release); }
+/* ARC entry points: always look -retain/-release up so classes may override them (or have them swizzled); when the
+   lookup finds NSObject's own, which only calls the root retain / release, call that directly instead of going through
+   NSObject's method: the same effect, one call fewer on the busiest path of all */
+id objc_retain(id o) {
+    if (!o) return o;
+    IMP imp = objc_rt_lookup(o, o->isa, s_retain), root = __atomic_load_n(&root_retain_imp, __ATOMIC_ACQUIRE);
+    if (!root) root = root_retain();
+    if (root && imp == root) return _objc_rootRetain(o);
+    return ((id (*)(id, SEL))imp)(o, s_retain);
+}
+void objc_release(id o) {
+    if (!o) return;
+    IMP imp = objc_rt_lookup(o, o->isa, s_release);
+    if (!__atomic_load_n(&root_retain_imp, __ATOMIC_ACQUIRE)) root_retain();
+    IMP root = __atomic_load_n(&root_release_imp, __ATOMIC_RELAXED);
+    if (root && imp == root) { _objc_rootRelease(o); return; }
+    ((void (*)(id, SEL))imp)(o, s_release);
+}
 id objc_autorelease(id o) { return o ? send0(o, s_autorelease) : o; }
 id objc_retainAutorelease(id o) { return objc_autorelease(objc_retain(o)); }
 id objc_retainAutoreleaseReturnValue(id o) { return objc_retainAutorelease(o); }
