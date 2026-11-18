@@ -482,7 +482,12 @@ static void text_context(cairo_t *c) {
     pango_cairo_context_set_font_options(pctx, fo);
     cairo_font_options_destroy(fo);
 }
+/* a partial frame (isim_frame_begin_rect): only this rectangle of the surface (device pixels) is drawn again; the
+   rest keeps the previous frame */
+static int frame_partial; static double part_px[4 * 8];       /* how many rectangles, and them */
+static int frame_drawn;                             /* a whole frame was drawn on the current surface */
 static void make_surface(void) {
+    frame_drawn = 0;
     if (screen_cr) { cairo_destroy(screen_cr); cairo_surface_destroy(surf); }
     surf_w = (int)lround(dev.width * px_scale); surf_h = (int)lround(dev.height * px_scale);
     /* under the shell the app draws privately and publishes whole frames (no tearing while the shell reads) */
@@ -572,6 +577,8 @@ ISIM_GUEST_ABI int isim_display_open(const char *title) {
 
 /* ---------------- drawing (all coordinates in points) ---------------- */
 ISIM_GUEST_ABI void isim_frame_begin(void) {
+    frame_partial = 0;
+    frame_drawn = 1;
     cairo_identity_matrix(cr);
     cairo_reset_clip(cr);
     cairo_set_operator(cr, CAIRO_OPERATOR_SOURCE);
@@ -579,6 +586,59 @@ ISIM_GUEST_ABI void isim_frame_begin(void) {
     cairo_paint(cr);
     cairo_set_operator(cr, CAIRO_OPERATOR_OVER);
     cairo_scale(cr, px_scale, px_scale);
+}
+/* the partial frame's rectangles, as a clip (device pixels) */
+static void clip_partial(void) {
+    for (int i = 0; i < frame_partial; i++) cairo_rectangle(cr, part_px[4 * i], part_px[4 * i + 1], part_px[4 * i + 2], part_px[4 * i + 3]);
+    cairo_clip(cr);
+}
+/* Starts a frame that redraws only the rectangles (n of them, x y w h in points) where the screen changed: drawing
+   is clipped to them, so what lies outside costs nothing. 0 when the previous frame is not on this surface (a new or
+   resized one) or there is nothing to draw: the caller draws a whole frame instead. */
+ISIM_GUEST_ABI int isim_frame_begin_rects(int n, const double *xywh) {
+    if (!surf || !frame_drawn || n <= 0 || n > 8) return 0;
+    int k = 0;
+    for (int i = 0; i < n; i++) {
+        const double *r = xywh + 4 * i;
+        if (!(r[2] > 0 && r[3] > 0)) continue;
+        double x0 = fmax(0, floor(r[0] * px_scale)), y0 = fmax(0, floor(r[1] * px_scale));
+        double x1 = fmin(surf_w, ceil((r[0] + r[2]) * px_scale)), y1 = fmin(surf_h, ceil((r[1] + r[3]) * px_scale));
+        if (x1 <= x0 || y1 <= y0) continue;
+        part_px[4 * k] = x0; part_px[4 * k + 1] = y0; part_px[4 * k + 2] = x1 - x0; part_px[4 * k + 3] = y1 - y0; k++;
+    }
+    if (!k) return 0;
+    frame_partial = k;
+    cairo_identity_matrix(cr);
+    cairo_reset_clip(cr);
+    clip_partial();
+    cairo_set_operator(cr, CAIRO_OPERATOR_SOURCE);
+    cairo_set_source_rgb(cr, 0, 0, 0);
+    cairo_paint(cr);
+    cairo_set_operator(cr, CAIRO_OPERATOR_OVER);
+    cairo_scale(cr, px_scale, px_scale);
+    return 1;
+}
+/* Whether anything drawn in this rectangle (current user coordinates) could show: it meets the clip's extents (the
+   surface, a partial frame's rectangles, the clips in effect). Views outside skip their own drawing. */
+ISIM_GUEST_ABI int isim_gfx_visible(double x, double y, double w, double h) {
+    double x0, y0, x1, y1;
+    cairo_clip_extents(cr, &x0, &y0, &x1, &y1);
+    if (x1 <= x0 || y1 <= y0) return 0;
+    if (frame_partial && !thread_cr) {      /* a partial frame on the screen: the rectangle must meet one of its rectangles */
+        double ux0 = x, uy0 = y, ux1 = x + w, uy1 = y + h;
+        cairo_user_to_device(cr, &ux0, &uy0); cairo_user_to_device(cr, &ux1, &uy1);
+        double rx0 = fmin(ux0, ux1), ry0 = fmin(uy0, uy1), rx1 = fmax(ux0, ux1), ry1 = fmax(uy0, uy1);
+        cairo_matrix_t m; cairo_get_matrix(cr, &m);
+        if (m.xy == 0 && m.yx == 0) {           /* (axis-aligned: exact; rotated: the clip extents below decide) */
+            int any = 0;
+            for (int i = 0; i < frame_partial && !any; i++) {
+                const double *p = part_px + 4 * i;
+                any = rx1 >= p[0] && rx0 <= p[0] + p[2] && ry1 >= p[1] && ry0 <= p[1] + p[3];
+            }
+            if (!any) return 0;
+        }
+    }
+    return x + w >= x0 && x <= x1 && y + h >= y0 && y <= y1;
 }
 ISIM_GUEST_ABI void isim_gfx_save(void) { cairo_save(cr); }
 ISIM_GUEST_ABI void isim_gfx_restore(void) { cairo_restore(cr); }
@@ -1537,12 +1597,17 @@ static void sample_luminance(void) {
     if (n) { isim_metric_add("apl.sum", 100 * sum / n); isim_metric_add("apl.n", 1); }
 }
 ISIM_GUEST_ABI void isim_frame_end(void) {
-    cairo_identity_matrix(cr); cairo_reset_clip(cr); cairo_scale(cr, px_scale, px_scale);
+    cairo_identity_matrix(cr); cairo_reset_clip(cr);
+    /* a partial frame: the chrome is drawn again over the part redrawn only (it is translucent in places) */
+    if (frame_partial) clip_partial();
+    cairo_scale(cr, px_scale, px_scale);
     draw_chrome();
     apply_corner_mask();
     cairo_surface_flush(surf);
     isim_diag_frame();
     sample_luminance();
+    cairo_reset_clip(cr);
+    frame_partial = 0;
     if (client_sock >= 0) {
         memcpy(client_pixels, cairo_image_surface_get_data(surf), (size_t)surf_w * surf_h * 4);
         struct shell_msg m = { .type = SM_FRAME }; send(client_sock, &m, sizeof m, MSG_NOSIGNAL); return;
@@ -2224,6 +2289,90 @@ ISIM_GUEST_ABI void isim_gfx_offscreen_end(void) {
     cairo_destroy(thread_cr);
     thread_cr = cr_stack[--cr_depth];
 }
+
+/* ---- view content caches: a view's own drawing kept as pixels, like a layer's contents on iOS ----
+   UIKit records what a view draws (text, shapes) once, here rasterized at the screen's scale; while the view does
+   not change, each frame paints those pixels instead of laying out text or filling gradients again. The recording
+   is kept too: a move by a fraction of a pixel rasterizes it again (no resampling), a scale change makes UIKit
+   draw anew. Main thread only. */
+struct content_cache { cairo_surface_t *rec, *img; double sx, sy, fx, fy; int x0, y0, used, empty; };
+static struct content_cache *ccache; static int ccache_cap;
+static _Thread_local double content_pending[4];            /* sx, sy, fx, fy of the recording in progress */
+static void content_rasterize(struct content_cache *c, double fx, double fy) {
+    if (c->img) { cairo_surface_destroy(c->img); c->img = NULL; }
+    double x, y, w, h;
+    cairo_recording_surface_ink_extents(c->rec, &x, &y, &w, &h);
+    c->fx = fx; c->fy = fy; c->empty = !(w > 0 && h > 0);
+    if (c->empty || w * h > 8e6) return;                      /* nothing drawn, or too large to keep: replayed */
+    int x0 = (int)floor(x + fx), y0 = (int)floor(y + fy), x1 = (int)ceil(x + w + fx), y1 = (int)ceil(y + h + fy);
+    c->img = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, x1 - x0, y1 - y0);
+    cairo_t *ic = cairo_create(c->img);
+    cairo_set_source_surface(ic, c->rec, fx - x0, fy - y0);
+    cairo_paint(ic);
+    cairo_destroy(ic);
+    c->x0 = x0; c->y0 = y0;
+}
+/* Starts recording a view's own drawing (in its coordinates, which must be axis-aligned and unflipped here). 0: not
+   possible here; the caller draws directly. */
+ISIM_GUEST_ABI int isim_gfx_content_begin(void) {
+    if (cr_depth >= 16) return 0;
+    cairo_matrix_t m; cairo_get_matrix(cr, &m);
+    if (m.xy != 0 || m.yx != 0 || m.xx <= 0 || m.yy <= 0) return 0;
+    double dx = 0, dy = 0; cairo_user_to_device(cr, &dx, &dy);
+    cairo_surface_t *s = cairo_recording_surface_create(CAIRO_CONTENT_COLOR_ALPHA, NULL);
+    cr_stack[cr_depth++] = thread_cr;
+    thread_cr = cairo_create(s); cairo_surface_destroy(s);
+    cairo_scale(thread_cr, m.xx, m.yy);
+    content_pending[0] = m.xx; content_pending[1] = m.yy; content_pending[2] = dx - floor(dx); content_pending[3] = dy - floor(dy);
+    return 1;
+}
+/* Ends the recording: returns the cache's id (> 0) for isim_gfx_content_draw, 0 on failure */
+ISIM_GUEST_ABI int isim_gfx_content_end(void) {
+    if (!cr_depth) return 0;
+    cairo_surface_t *rec = cairo_surface_reference(cairo_get_target(thread_cr));
+    cairo_destroy(thread_cr);
+    thread_cr = cr_stack[--cr_depth];
+    int i = 0;
+    while (i < ccache_cap && ccache[i].used) i++;
+    if (i == ccache_cap) {
+        int n = ccache_cap ? ccache_cap * 2 : 256;
+        struct content_cache *g = realloc(ccache, n * sizeof *g);
+        if (!g) { cairo_surface_destroy(rec); return 0; }
+        memset(g + ccache_cap, 0, (n - ccache_cap) * sizeof *g);
+        ccache = g; ccache_cap = n;
+    }
+    struct content_cache *c = &ccache[i];
+    memset(c, 0, sizeof *c);
+    c->used = 1; c->rec = rec; c->sx = content_pending[0]; c->sy = content_pending[1];
+    content_rasterize(c, content_pending[2], content_pending[3]);
+    return i + 1;
+}
+/* Paints a cached drawing where the view now is. 0 when the current scale or rotation differs from the recording's
+   (the caller frees it and draws anew). */
+ISIM_GUEST_ABI int isim_gfx_content_draw(int id) {
+    if (id <= 0 || id > ccache_cap || !ccache[id - 1].used) return 0;
+    struct content_cache *c = &ccache[id - 1];
+    cairo_matrix_t m; cairo_get_matrix(cr, &m);
+    if (m.xy != 0 || m.yx != 0 || fabs(m.xx - c->sx) > 1e-9 * c->sx || fabs(m.yy - c->sy) > 1e-9 * c->sy) return 0;
+    if (c->empty) return 1;
+    double dx = 0, dy = 0; cairo_user_to_device(cr, &dx, &dy);
+    double fx = dx - floor(dx), fy = dy - floor(dy);
+    cairo_save(cr);
+    cairo_identity_matrix(cr);
+    if (c->img && (fabs(fx - c->fx) > 0.01 || fabs(fy - c->fy) > 0.01)) content_rasterize(c, fx, fy);
+    if (c->img) cairo_set_source_surface(cr, c->img, floor(dx) + c->x0, floor(dy) + c->y0);
+    else cairo_set_source_surface(cr, c->rec, dx, dy);
+    cairo_paint(cr);
+    cairo_restore(cr);
+    return 1;
+}
+ISIM_GUEST_ABI void isim_gfx_content_free(int id) {
+    if (id <= 0 || id > ccache_cap || !ccache[id - 1].used) return;
+    struct content_cache *c = &ccache[id - 1];
+    if (c->img) cairo_surface_destroy(c->img);
+    if (c->rec) cairo_surface_destroy(c->rec);
+    memset(c, 0, sizeof *c);
+}
 ISIM_GUEST_ABI int isim_gfx_offscreen_depth(void) { return cr_depth; }
 
 /* ---- attributed text: Pango markup (spans carry font, colour, kerning, underline, strike, rise) ---- */
@@ -2611,7 +2760,7 @@ static const struct shim isim_table[] = {
     H(isim_log_record), H(isim_log_range), H(isim_log_get), H(isim_process_bytes_written), H(isim_set_container_home), H(isim_signpost_print), H(isim_metric_add), H(isim_metric_max),
     H(isim_metric_get), H(isim_resource_usage), H(isim_hang_count), H(isim_hang_get), H(isim_diag_set_app), H(isim_diag_app),
     H(isim_diag_process_start), H(isim_sample_thread), H(isim_sample_main_stack), H(isim_launch_stack),
-    H(isim_device_metrics), H(isim_set_phone_compatibility_mode), H(isim_os_version), H(isim_display_open), H(isim_frame_begin), H(isim_frame_end), H(isim_time),
+    H(isim_device_metrics), H(isim_set_phone_compatibility_mode), H(isim_os_version), H(isim_display_open), H(isim_frame_begin), H(isim_frame_begin_rects), H(isim_frame_end), H(isim_gfx_visible), H(isim_gfx_content_begin), H(isim_gfx_content_end), H(isim_gfx_content_draw), H(isim_gfx_content_free), H(isim_time),
     H(isim_gfx_save), H(isim_gfx_restore), H(isim_gfx_translate), H(isim_gfx_scale), H(isim_gfx_clip_rounded),
     H(isim_gfx_fill_rounded), H(isim_gfx_stroke_rounded), H(isim_gfx_fill_ellipse), H(isim_gfx_push_group), H(isim_gfx_pop_group),
     H(isim_path_begin), H(isim_path_move), H(isim_path_line), H(isim_path_curve), H(isim_path_arc), H(isim_path_close),

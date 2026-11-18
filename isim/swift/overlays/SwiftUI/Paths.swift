@@ -276,9 +276,49 @@ public struct Path: Equatable, LosslessStringConvertible, @unchecked Sendable {
         flush(false)
         return out
     }
+    /// The smallest rectangle around the outline (curves at their extrema, not their control points), like
+    /// CGPath.boundingBoxOfPath. Computed from the curves' derivatives: drawing asks it for every shape it fills.
     public var boundingRect: CGRect {
         var minX = CGFloat.infinity, minY = CGFloat.infinity, maxX = -CGFloat.infinity, maxY = -CGFloat.infinity
-        for (pts, _) in _polylines() { for p in pts { minX = min(minX, p.x); minY = min(minY, p.y); maxX = max(maxX, p.x); maxY = max(maxY, p.y) } }
+        func add(_ p: CGPoint) { minX = min(minX, p.x); minY = min(minY, p.y); maxX = max(maxX, p.x); maxY = max(maxY, p.y) }
+        // where one coordinate of a quadratic / cubic Bézier curve turns, at parameters in (0, 1) (no allocation:
+        // a Canvas asks this for thousands of curves a frame)
+        func quadTurn(_ p0: CGPoint, _ c: CGPoint, _ p1: CGPoint, _ u0: CGFloat, _ uc: CGFloat, _ u1: CGFloat) {
+            let d = u0 - 2 * uc + u1
+            guard abs(d) > 1e-12 else { return }
+            let t = (u0 - uc) / d
+            if t > 0 && t < 1 { add(_quad(p0, c, p1, t)) }
+        }
+        func cubicTurns(_ p0: CGPoint, _ c1: CGPoint, _ c2: CGPoint, _ p1: CGPoint, _ u0: CGFloat, _ u1: CGFloat, _ u2: CGFloat, _ u3: CGFloat) {
+            let a = -u0 + 3 * u1 - 3 * u2 + u3, b = 2 * (u0 - 2 * u1 + u2), c = u1 - u0      // B'(t) / 3 = a t² + b t + c
+            func at(_ t: CGFloat) { if t > 0 && t < 1 { add(_cubic(p0, c1, c2, p1, t)) } }
+            if abs(a) < 1e-12 {
+                if abs(b) > 1e-12 { at(-c / b) }
+            } else {
+                let disc = b * b - 4 * a * c
+                if disc >= 0 { let s = disc.squareRoot(); at((-b + s) / (2 * a)); at((-b - s) / (2 * a)) }
+            }
+        }
+        var last = CGPoint.zero, start = CGPoint.zero
+        for e in elements {
+            switch e {
+            case .move(let a): add(a); last = a; start = a
+            case .line(let a): add(last); add(a); last = a
+            case .quadCurve(let a, let c):
+                add(last); add(a)
+                // (only when the control point lies outside the box of the ends can the curve reach past them)
+                if c.x < min(last.x, a.x) || c.x > max(last.x, a.x) { quadTurn(last, c, a, last.x, c.x, a.x) }
+                if c.y < min(last.y, a.y) || c.y > max(last.y, a.y) { quadTurn(last, c, a, last.y, c.y, a.y) }
+                last = a
+            case .curve(let a, let c1, let c2):
+                add(last); add(a)
+                let lo = CGPoint(x: min(last.x, a.x), y: min(last.y, a.y)), hi = CGPoint(x: max(last.x, a.x), y: max(last.y, a.y))
+                if min(c1.x, c2.x) < lo.x || max(c1.x, c2.x) > hi.x { cubicTurns(last, c1, c2, a, last.x, c1.x, c2.x, a.x) }
+                if min(c1.y, c2.y) < lo.y || max(c1.y, c2.y) > hi.y { cubicTurns(last, c1, c2, a, last.y, c1.y, c2.y, a.y) }
+                last = a
+            case .closeSubpath: last = start
+            }
+        }
         if minX > maxX { return .null }
         return CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
     }

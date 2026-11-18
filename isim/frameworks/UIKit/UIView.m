@@ -311,7 +311,7 @@ static char kContentScale;
     }
     return self;
 }
-- (void)dealloc { free(_anim); free(_vfx); }
+- (void)dealloc { isim_ui_content_drop(self); free(_anim); free(_vfx); }
 - (void)_isim_removeAllAnimations { anim_remove_all(self); }
 /* colour matrix, blur, content drop shadow and blend mode applied to this view and its subviews as one group
    (layout: isim_gfx_pop_group_filtered); NULL removes them */
@@ -561,7 +561,7 @@ void (*isim_ui_appearance_hook)(UIView *v);          /* UIAppearance.m: proxies 
     if (prev && ![prev isEqual:t]) [self traitCollectionDidChange:prev];
     for (UIView *s in [_subs copy]) [s _isim_traitsWalk];
 }
-- (void)setNeedsDisplay { isim_ui_set_needs_display(); }
+- (void)setNeedsDisplay { isim_ui_content_changed(self); isim_ui_set_needs_display(); }
 - (void)setNeedsDisplayInRect:(CGRect)r { isim_ui_set_needs_display(); }
 - (void)drawRect:(CGRect)r {}
 /* YES: drawRect: is not part of the view's rendering (MTKView, MetalKit, calls it from its own frame loop) */
@@ -1201,6 +1201,114 @@ static double concentric_radius(UIView *v, int corner, double minimum) {
     return f;
 }
 static IMP base_drawRect;
+
+/* ---- content caches ----
+   A view's own drawing (its text, its shapes: _isim_drawContent and drawRect:) is kept as pixels while it does not
+   change, like a layer's contents on iOS, so a frame paints them instead of laying out text and filling paths again.
+   Only classes whose drawing depends on nothing but their state opt in: they answer a signature of that state
+   (_isim_contentSignature, 0: never cached) and call setNeedsDisplay when it changes (which bumps the generation the
+   signature includes). A drawing is cached once it was the same for two frames, so animating content is not kept.
+   ISIM_CONTENT_CACHE=0 turns it off. */
+struct vcache { __unsafe_unretained UIView *v; uint64_t sig, gen; int id, stable; };
+static struct vcache *vc; static size_t vc_cap, vc_n, vc_live;
+#define VC_TOMB ((__bridge UIView *)(void *)1)
+static int content_cache_on = -1;
+static __unsafe_unretained Class *vc_classes; static int vc_nclasses;      /* (classes live for the whole run) */
+static size_t vc_hash(const void *p) { uint64_t x = (uintptr_t)p; x ^= x >> 33; x *= 0xff51afd7ed558ccdull; x ^= x >> 33; return (size_t)x; }
+static struct vcache *vc_find(UIView *v, BOOL create) {
+    if (create && (vc_n + 1) * 2 >= vc_cap) {
+        size_t ocap = vc_cap; struct vcache *old = vc;
+        vc_cap = ocap ? ocap * 2 : 256; vc = calloc(vc_cap, sizeof *vc); vc_n = 0;
+        for (size_t i = 0; i < ocap; i++) if (old[i].v && old[i].v != VC_TOMB) {
+            size_t j = vc_hash((__bridge void *)old[i].v) & (vc_cap - 1);
+            while (vc[j].v) j = (j + 1) & (vc_cap - 1);
+            vc[j] = old[i]; vc_n++;
+        }
+        free(old);
+    }
+    if (!vc_cap) return NULL;
+    size_t j = vc_hash((__bridge void *)v) & (vc_cap - 1); struct vcache *tomb = NULL;
+    while (vc[j].v) {
+        if (vc[j].v == v) return &vc[j];
+        if (vc[j].v == VC_TOMB && !tomb) tomb = &vc[j];
+        j = (j + 1) & (vc_cap - 1);
+    }
+    if (!create) return NULL;
+    struct vcache *e = tomb ? tomb : &vc[j];
+    if (!tomb) vc_n++;
+    memset(e, 0, sizeof *e); e->v = v; vc_live++;
+    return e;
+}
+void isim_ui_content_drop(UIView *v) {
+    if (!vc_live) return;
+    struct vcache *e = vc_find(v, NO);
+    if (!e) return;
+    if (e->id) isim_gfx_content_free(e->id);
+    memset(e, 0, sizeof *e); e->v = VC_TOMB; vc_live--;
+}
+void isim_ui_content_changed(UIView *v) {
+    if (!vc_live) return;
+    struct vcache *e = vc_find(v, NO);
+    if (e) e->gen++;
+}
+/* classes outside UIKit whose drawing depends only on their state and setNeedsDisplay (SwiftUI's shape and canvas
+   views): instances of exactly these classes are cached with the base signature */
+void isim_ui_content_cacheable(Class c) {
+    for (int i = 0; i < vc_nclasses; i++) if (vc_classes[i] == c) return;
+    vc_classes = (__unsafe_unretained Class *)realloc(vc_classes, (vc_nclasses + 1) * sizeof *vc_classes);
+    vc_classes[vc_nclasses++] = c;
+}
+/* what every cached drawing depends on: its size, the appearance and direction it is drawn in, its generation */
+uint64_t isim_ui_content_base_signature(UIView *v) {
+    struct vcache *e = vc_live ? vc_find(v, NO) : NULL;
+    CGSize s = v.bounds.size;
+    uint64_t h = 1469598103934665603ull;
+#define VC_MIX(x) (h = (h ^ (uint64_t)(x)) * 1099511628211ull)
+    VC_MIX((int64_t)llround(s.width * 64)); VC_MIX((int64_t)llround(s.height * 64));
+    VC_MIX(isim_ui_style()); VC_MIX(isim_ui_drawing_rtl); VC_MIX(e ? e->gen : 0);
+#undef VC_MIX
+    return h | 1;                                               /* never 0 */
+}
+- (uint64_t)_isim_contentSignature {
+    Class c = object_getClass(self);
+    for (int i = 0; i < vc_nclasses; i++) if (vc_classes[i] == c) return isim_ui_content_base_signature(self);
+    return 0;
+}
+/* the view's own drawing, as it always was */
+- (void)_isim_drawOwnContent:(BOOL)withDrawRect {
+    [self _isim_drawContent];
+    if (withDrawRect) {
+        isim_gfx_save(); CGContextSaveGState(isim_cg_current_context());
+        [self drawRect:self.bounds];
+        CGContextRestoreGState(isim_cg_current_context()); isim_gfx_restore();
+    }
+}
+/* draws the view's own content from its cache, or caches it; NO: draw it directly */
+- (BOOL)_isim_drawCachedContent:(BOOL)withDrawRect {
+    if (content_cache_on < 0) { const char *e = getenv("ISIM_CONTENT_CACHE"); content_cache_on = !(e && !strcmp(e, "0")); }
+    if (!content_cache_on) return NO;
+    uint64_t sig = [self _isim_contentSignature];
+    if (!sig) return NO;
+    struct vcache *e = vc_find(self, YES);
+    if (e->sig != sig) {                                        /* changed: drawn directly until it settles */
+        if (e->id) { isim_gfx_content_free(e->id); e->id = 0; }
+        e->sig = [self _isim_contentSignature];                 /* (the entry now exists: its generation counts) */
+        e->stable = 0;
+        return NO;
+    }
+    if (e->id) {
+        if (isim_gfx_content_draw(e->id)) return YES;
+        isim_gfx_content_free(e->id); e->id = 0;                /* another scale or a rotation */
+        return NO;
+    }
+    if (++e->stable < 2 || !isim_gfx_content_begin()) return NO;
+    [self _isim_drawOwnContent:withDrawRect];
+    e->id = isim_gfx_content_end();
+    if (e->id && isim_gfx_content_draw(e->id)) return YES;
+    if (e->id) { isim_gfx_content_free(e->id); e->id = 0; }
+    return NO;
+}
+
 - (void)_isim_render {
     /* presentation values: model values, or the in-flight value of a running animation */
     CGRect frame = _frame; CGFloat alpha = _alpha; CGAffineTransform xf = _transform;
@@ -1242,6 +1350,12 @@ static IMP base_drawRect;
         isim_gfx_concat(xf.a, xf.b, xf.c, xf.d, xf.tx, xf.ty);
         isim_gfx_translate(-an.x * sz.width, -an.y * sz.height);
     }
+    /* culling: a view whose own drawing (with its shadow and some room for strokes and content past its bounds) is
+       outside the clip (off screen, or outside a partial frame's region) skips it; one that clips its subviews skips
+       them too, others still draw theirs (they may stick out) */
+    double reach = 48 + borderW + (shadowOp > 0 ? 2 * shadowRad + fabs(shadowOff.width) + fabs(shadowOff.height) : 0);
+    BOOL ownVisible = isim_gfx_visible(-reach, -reach, sz.width + 2 * reach, sz.height + 2 * reach);
+    if (!ownVisible && (_clipsToBounds || _layer.masksToBounds) && !_layer.mask && !_vfx && !_shade) { isim_gfx_restore(); return; }
     /* a window, a view controller's view and a view with trait overrides draw with their own traits (dynamic colors) */
     BOOL pushedStyle = _vc || [self _isim_hasTraitOverrides] || !_superview;
     BOOL wasRTL = isim_ui_drawing_rtl;
@@ -1263,16 +1377,16 @@ static IMP base_drawRect;
     double cr[4]; BOOL corners = [self _isim_cornerRadii:cr size:sz radius:radius];   /* per-corner radii */
     if (!corners && _cornerConfig) radius = cr[0];                /* a uniform corner configuration */
     int curve = ca_begin_corner_curve(_layer);            /* the background, clip and border follow layer.cornerCurve */
-    if ((bg[3] > 0 || _layer.shadowPath) && shadowOp > 0 && _layer.shadowColor) {
+    if (ownVisible && (bg[3] > 0 || _layer.shadowPath) && shadowOp > 0 && _layer.shadowColor) {
         if (corners) isim_ca_view_shadow_corners(_layer, sz, cr, shadowOp, shadowRad, shadowOff);
         else isim_ca_view_shadow(_layer, sz, radius, shadowOp, shadowRad, shadowOff);
     }
-    if (bg[3] > 0) {
+    if (ownVisible && bg[3] > 0) {
         if (corners) { ca_corners_path(CGRectMake(0, 0, sz.width, sz.height), cr); isim_path_fill(bg); }
         else isim_gfx_fill_rounded(0, 0, sz.width, sz.height, radius, bg);
     }
     extern UIImage *isim_ui_pattern_image(UIColor *c);         /* a pattern colour's image, tiled (UIColorExtras.m) */
-    UIImage *pattern = !bgAnim && _backgroundColor ? isim_ui_pattern_image(_backgroundColor) : nil;
+    UIImage *pattern = ownVisible && !bgAnim && _backgroundColor ? isim_ui_pattern_image(_backgroundColor) : nil;
     if (pattern) {
         isim_gfx_save();
         if (corners) { ca_corners_path(CGRectMake(0, 0, sz.width, sz.height), cr); isim_gfx_clip_path(); }
@@ -1287,14 +1401,10 @@ static IMP base_drawRect;
         else isim_gfx_clip_rounded(0, 0, sz.width, sz.height, radius);
     }
     ca_end_corner_curve(curve);
-    [self _isim_drawContent];
-    [_layer _isim_renderLayerContents];      /* drawInContext: overrides (AVPlayerLayer) and sublayers */
     if (!base_drawRect) base_drawRect = class_getMethodImplementation([UIView class], @selector(drawRect:));
-    if (class_getMethodImplementation(object_getClass(self), @selector(drawRect:)) != base_drawRect && ![self _isim_skipsDrawRect]) {
-        isim_gfx_save(); CGContextSaveGState(isim_cg_current_context());
-        [self drawRect:self.bounds];
-        CGContextRestoreGState(isim_cg_current_context()); isim_gfx_restore();
-    }
+    BOOL drawsRect = class_getMethodImplementation(object_getClass(self), @selector(drawRect:)) != base_drawRect && ![self _isim_skipsDrawRect];
+    if (ownVisible && ![self _isim_drawCachedContent:drawsRect]) [self _isim_drawOwnContent:drawsRect];
+    [_layer _isim_renderLayerContents];      /* drawInContext: overrides (AVPlayerLayer) and sublayers (may be anywhere) */
     isim_gfx_translate(-_boundsOrigin.x, -_boundsOrigin.y);
     for (UIView *s in _subs) [s _isim_render];
     [self _isim_drawOverlay];

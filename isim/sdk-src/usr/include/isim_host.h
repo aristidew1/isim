@@ -32,6 +32,13 @@ int isim_device_fold_state(void);                     /* 0 not foldable, 1 folde
 double isim_device_hinge_angle(void);                /* the hinge in degrees (0 closed, 180 flat), -1 on a device that does not fold */
 int isim_display_open(const char *title);
 void isim_frame_begin(void);
+int isim_frame_begin_rects(int n, const double *xywh);   /* redraws only these rectangles (points, at most 8); 0: draw a whole frame */
+int isim_gfx_visible(double x, double y, double w, double h);   /* whether a rectangle (current coordinates) meets the clip */
+/* a view's own drawing kept as pixels (UIView.m): record it between begin and end, then paint it with draw */
+int isim_gfx_content_begin(void);
+int isim_gfx_content_end(void);
+int isim_gfx_content_draw(int id);
+void isim_gfx_content_free(int id);
 void isim_frame_end(void);
 double isim_time(void);
 void isim_gfx_save(void);

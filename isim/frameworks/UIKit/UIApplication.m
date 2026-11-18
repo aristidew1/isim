@@ -1327,7 +1327,29 @@ static void handle_id_touch(const struct isim_event *ev) {
 - (void)setValue_isimTapCount:(NSUInteger)n { self.tapCount = n; }
 @end
 
-static void render_frame(void) {
+static void render_frame_in(const double *partial, int n);
+static void layout_all(void);
+static void render_frame(void) { render_frame_in(NULL, 0); }
+/* a whole frame when something asked for one, else only the region a known change touched (isim_ui_damage_end) */
+static void render_pending_frame(void) {
+    extern int isim_ui_frame_stats; extern void isim_ui_frame_stats_report(int, int, double);
+    static int n_full, n_part; static double area_sum, stats_t;
+    if (isim_ui_frame_stats > 0) {
+        double t = isim_time();
+        if (stats_t == 0) stats_t = t;
+        if (t - stats_t >= 1) { isim_ui_frame_stats_report(n_full, n_part, n_part ? area_sum / n_part : 0); n_full = n_part = 0; area_sum = 0; stats_t = t; }
+    }
+    double r[4 * 8]; int n;
+    if (isim_ui_take_display()) { isim_ui_take_damage(NULL); layout_all(); render_frame(); n_full++; return; }
+    if (!(n = isim_ui_take_damage(r))) return;
+    layout_all();
+    if (isim_ui_take_display()) { isim_ui_take_damage(NULL); render_frame(); n_full++; return; }   /* the layout changed more */
+    render_frame_in(r, n);
+    CGSize s = UIScreen.mainScreen.bounds.size; double area = 0;
+    for (int i = 0; i < n; i++) area += r[4 * i + 2] * r[4 * i + 3];
+    n_part++; area_sum += 100 * fmin(1, area / fmax(1, s.width * s.height));
+}
+static void render_frame_in(const double *partial, int n) {
     { extern void isim_ui_trait_registrations_tick(void); isim_ui_trait_registrations_tick(); }
     isim_ui_keyboard_check();
     { extern void isim_ui_accessibility_frame_tick(void); isim_ui_accessibility_frame_tick(); }
@@ -1350,7 +1372,7 @@ static void render_frame(void) {
     UIView *styleSource = vc.viewIfLoaded ?: key;
     BOOL dark = (styleSource ? styleSource.traitCollection.userInterfaceStyle : isim_ui_style()) == UIUserInterfaceStyleDark;
     isim_set_status_bar_style(st == UIStatusBarStyleLightContent ? 0 : st == UIStatusBarStyleDarkContent ? 1 : !dark);
-    isim_frame_begin();
+    if (!partial || !isim_frame_begin_rects(n, partial)) isim_frame_begin();
     NSArray *ws = [UIApplication.sharedApplication.windows sortedArrayUsingComparator:^NSComparisonResult(UIWindow *a, UIWindow *b) {
         return a.windowLevel < b.windowLevel ? NSOrderedAscending : a.windowLevel > b.windowLevel ? NSOrderedDescending : NSOrderedSame; }];
     if (isim_ui_scenes_split()) { double black[4] = { 0, 0, 0, 1 }; CGRect sb = UIScreen.mainScreen.bounds; isim_gfx_fill_rounded(0, 0, sb.size.width, sb.size.height, 0, black); }   /* split view divider */
@@ -2042,7 +2064,7 @@ static void run_loop_once(void) {
         layout_all();
         time_t now = time(NULL); struct tm tm; localtime_r(&now, &tm);
         if (tm.tm_min != last_minute) { last_minute = tm.tm_min; isim_ui_set_needs_display(); }
-        if (isim_ui_take_display() && !backgrounded) { layout_all(); render_frame(); }
+        if (!backgrounded) render_pending_frame(); else { isim_ui_take_display(); isim_ui_take_damage(NULL); }
         double timeout = next < 0.5 ? next : 0.5;
         if ((isim_ui_animations_running() || isim_ui_display_links_active() || isim_ui_update_links_active()) && !backgrounded) { isim_ui_set_needs_display(); if (timeout > 1.0 / 60) timeout = 1.0 / 60; }
         { extern double isim_main_next_due(void); double due = isim_main_next_due(); if (due < timeout) timeout = due; }   /* blocks queued while rendering run right away */

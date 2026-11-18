@@ -442,6 +442,11 @@ extension URLSessionTask {
     @objc(earliestBeginDate) var _objc_earliestBeginDate: Date? { get { earliestBeginDate } set { earliestBeginDate = newValue } }
     @objc(prefersIncrementalDelivery) var _objc_prefersIncrementalDelivery: Bool { get { prefersIncrementalDelivery } set { prefersIncrementalDelivery = newValue } }
     @objc(progress) var _objc_progress: Progress { progress }
+    /// iOS 15: the task's own delegate; an Objective-C one is wrapped like a session's (each method it implements is called)
+    @objc(delegate) var _objc_delegate: AnyObject? {
+        get { let d = delegate; return (d as? _ObjCURLSessionDelegate)?.target ?? d }
+        set { delegate = _ObjCURLSessionDelegate.wrap(newValue) as? URLSessionTaskDelegate }
+    }
     @objc(resume) func _objc_resume() { resume() }
     @objc(suspend) func _objc_suspend() { suspend() }
     @objc(cancel) func _objc_cancel() { cancel() }

@@ -76,9 +76,9 @@ extension EnvironmentValues {
     }
     return s
 }
-@MainActor func _resolvePaint(_ style: any ShapeStyle, in rect: CGRect, _ env: EnvironmentValues) -> _Paint {
+@MainActor func _resolvePaint(_ style: any ShapeStyle, in rect: @autoclosure () -> CGRect, _ env: EnvironmentValues) -> _Paint {
     let s = _unwrapStyle(style, env)
-    if let p = s as? _PaintStyle { return p._paint(in: rect, env) }
+    if let p = s as? _PaintStyle { return p._paint(in: rect(), env) }     // (only gradients and images read the rect)
     return .color(_color(of: s, env).uiColor)
 }
 /// The single color a style stands for (gradients: their first stop).
@@ -208,8 +208,10 @@ final class _PathNode: _Node {
     }
 }
 final class _SUIPathView: UIView {
-    var ops: [_DrawOp] = []
-    override init(frame: CGRect) { super.init(frame: frame); backgroundColor = .clear; isUserInteractionEnabled = false }
+    // (set at each mount: its pixels are kept between mounts, UIView.m's content caches)
+    var ops: [_DrawOp] = [] { didSet { setNeedsDisplay() } }
+    static let cacheable: Void = _isimContentCacheable(_SUIPathView.self)
+    override init(frame: CGRect) { _ = Self.cacheable; super.init(frame: frame); backgroundColor = .clear; isUserInteractionEnabled = false }
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
     override func draw(_ rect: CGRect) { for op in ops { _draw(op) } }
 }

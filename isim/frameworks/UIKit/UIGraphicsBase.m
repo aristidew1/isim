@@ -8,9 +8,77 @@
 /* ================= frame scheduling & device ================= */
 static BOOL needs_display = YES, needs_layout = YES;
 BOOL isim_ui_in_layout;
-void isim_ui_set_needs_display(void) { needs_display = YES; }
-void isim_ui_set_needs_layout(void) { needs_layout = YES; needs_display = YES; }
+/* ISIM_FRAME_STATS=1: once a second, how many whole and partial frames were drawn and what asked for whole ones
+   (the callers' return addresses: a perf map built from ISIM_IMAGE_LIST names them) */
+int isim_ui_frame_stats = -1;
+static struct { void *ra; int n; } fs_callers[48];
+static void fs_note(void *ra) {
+    if (isim_ui_frame_stats < 0) { const char *e = getenv("ISIM_FRAME_STATS"); isim_ui_frame_stats = e && atoi(e) > 0; }
+    if (!isim_ui_frame_stats || needs_display) return;          /* the first request of a frame only */
+    for (int i = 0; i < 48; i++) {
+        if (fs_callers[i].ra == ra) { fs_callers[i].n++; return; }
+        if (!fs_callers[i].ra) { fs_callers[i].ra = ra; fs_callers[i].n = 1; return; }
+    }
+}
+void isim_ui_frame_stats_report(int full, int partial, double area) {
+    fprintf(stderr, "isim frames: %d whole, %d partial (%.0f%% of the screen on average); whole frames asked by", full, partial, area);
+    for (int i = 0; i < 48 && fs_callers[i].ra; i++) fprintf(stderr, " %p x%d", fs_callers[i].ra, fs_callers[i].n);
+    fprintf(stderr, "\n");
+    memset(fs_callers, 0, sizeof fs_callers);
+}
+void isim_ui_set_needs_display(void) { fs_note(__builtin_return_address(0)); needs_display = YES; }
+void isim_ui_set_needs_layout(void) { fs_note(__builtin_return_address(0)); needs_layout = YES; needs_display = YES; }
 BOOL isim_ui_take_display(void) { BOOL d = needs_display; needs_display = NO; return d; }
+
+/* Partial frames: changes made between isim_ui_damage_begin and isim_ui_damage_end are known to stay inside a region
+   of the screen (SwiftUI's local refresh of a TimelineView or an animating shape): when nothing else asked for a frame,
+   only that region is drawn again (isim_frame_begin_rect). A display request inside the bracket with no region falls
+   back to a whole frame. */
+static int damage_depth; static BOOL damage_saved_display;
+/* the region: a few rectangles (separate changes stay separate rather than one box around them all); overlapping
+   ones merge, and past ISIM_DAMAGE_MAX the closest pair merges */
+#define ISIM_DAMAGE_MAX 8
+static CGRect damage_rects[ISIM_DAMAGE_MAX]; static int damage_n;
+static void damage_add(CGRect r) {
+    for (BOOL merged = YES; merged;) {                       /* absorb what it overlaps, until nothing does */
+        merged = NO;
+        for (int i = 0; i < damage_n; i++) if (CGRectIntersectsRect(damage_rects[i], r)) {
+            r = CGRectUnion(r, damage_rects[i]); damage_rects[i] = damage_rects[--damage_n]; merged = YES; break;
+        }
+    }
+    if (damage_n == ISIM_DAMAGE_MAX) {                        /* full: merge into the one that grows least */
+        int best = 0; double grow = INFINITY;
+        for (int i = 0; i < damage_n; i++) {
+            CGRect u = CGRectUnion(damage_rects[i], r);
+            double g = u.size.width * u.size.height - damage_rects[i].size.width * damage_rects[i].size.height;
+            if (g < grow) { grow = g; best = i; }
+        }
+        r = CGRectUnion(r, damage_rects[best]); damage_rects[best] = damage_rects[--damage_n];
+        damage_add(r);
+        return;
+    }
+    damage_rects[damage_n++] = r;
+}
+void isim_ui_damage_begin(void) { if (damage_depth++ == 0) { damage_saved_display = needs_display; needs_display = NO; } }
+void isim_ui_damage_end(double x, double y, double w, double h) {
+    if (damage_depth <= 0 || --damage_depth) return;
+    if (needs_display) {
+        if (w > 0 && h > 0 && isfinite(x) && isfinite(y)) damage_add(CGRectMake(x, y, w, h));
+        else damage_saved_display = YES;
+    }
+    needs_display = damage_saved_display;
+}
+/* the region changed since the last frame (up to ISIM_DAMAGE_MAX rectangles, as x, y, w, h); taken: the next frame
+   starts with none. Returns how many. */
+int isim_ui_take_damage(double *out) {
+    int n = damage_n;
+    if (out) for (int i = 0; i < n; i++) {
+        out[4 * i] = damage_rects[i].origin.x; out[4 * i + 1] = damage_rects[i].origin.y;
+        out[4 * i + 2] = damage_rects[i].size.width; out[4 * i + 3] = damage_rects[i].size.height;
+    }
+    damage_n = 0;
+    return n;
+}
 BOOL isim_ui_take_layout(void) { BOOL d = needs_layout; needs_layout = NO; return d; }
 
 static struct isim_device ui_dev; static BOOL ui_dev_init;

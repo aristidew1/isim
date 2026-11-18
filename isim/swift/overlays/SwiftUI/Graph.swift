@@ -153,6 +153,12 @@ extension CGSize { subscript(axis: Axis) -> CGFloat { axis == .horizontal ? widt
         submitActions.filter { path.hasPrefix($0.key) }.max { $0.key.count < $1.key.count }?.value
     }
 
+    // local refresh (LocalRefresh.swift): views that redraw on their own every frame or on a schedule (TimelineView,
+    // in-flight animatable data) re-evaluate only their own subtree instead of the whole graph
+    var scopeStack: [(path: String, requested: Bool)] = []
+    var localScopes: [String: _LocalScope] = [:]
+    var scopeByNode: [ObjectIdentifier: _LocalScope] = [:]
+
     // GeometryReader / onGeometryChange frames measured from the views (Geometry+Spaces.swift)
     var geometryReads: [String: (String, CoordinateSpace)] = [:]
     var geometryCache: [String: CGRect] = [:]
@@ -184,6 +190,7 @@ extension CGSize { subscript(axis: Axis) -> CGFloat { axis == .horizontal ? widt
         self.safeArea = safeArea
         usedKeys = []; mountedKeys = []; usedChanges = []; usedTasks = []; usedAppear = []; postRender = []; focusLinks = []; submitActions = [:]; urlHandlers = [:]
         usedSubscriptions = []; idViews = [:]; geometryReads = [:]
+        scopeStack = []; scopeByNode = [:]
         if !geometryPass { geometryPasses = 0 }
         geometryPass = false
         var env = EnvironmentValues()
@@ -222,6 +229,8 @@ extension CGSize { subscript(axis: Axis) -> CGFloat { axis == .horizontal ? widt
         for (k, t) in tasks where !usedTasks.contains(k) { t.cancel(); tasks[k] = nil }
         for k in subscriptions.keys where !usedSubscriptions.contains(k) { subscriptions[k] = nil; receiveActions[k] = nil }
         for k in appeared where !usedAppear.contains(k) { appeared.remove(k); disappearActions.removeValue(forKey: k)?() }
+        localScopes = localScopes.filter { $0.value.renderStamp == renderCount }
+        scopeByNode = [:]
         let work = postRender
         postRender = []
         for w in work { w() }
@@ -381,6 +390,13 @@ extension CGSize { subscript(axis: Axis) -> CGFloat { axis == .horizontal ? widt
 
     /// Mounts a node (and its subtree) as a subview of `parent` at `frame` (node.frame is parent-relative).
     func mount(_ node: _Node, in parent: UIView, order: Int) {
+        // a local refresh scope: the views its subtree mounts are kept, so a local refresh knows which ones went away
+        if !scopeByNode.isEmpty, let s = scopeByNode.removeValue(forKey: ObjectIdentifier(node)) {
+            let before = mountedKeys
+            mount(node, in: parent, order: order)
+            s.keys = mountedKeys.subtracting(before)
+            return
+        }
         if node is _GroupNode && !(node.children.isEmpty) && node.transparent {
             for c in node.children { mount(c, in: parent, order: order) }
             return
@@ -518,7 +534,9 @@ extension UIView {
         return s
     }
     struct _SizeKey: Hashable { let w: CGFloat, h: CGFloat }
-    private var sizeCache: [_SizeKey: CGSize] = [:]
+    /// the proposals this node was asked in its last layout pass, with its answers (a local refresh checks that new
+    /// content answers them the same, so the layout around it holds)
+    private(set) var sizeCache: [_SizeKey: CGSize] = [:]
     private var sizeEpoch = -1
     /// A new pass (a render, a measure, a placement from UIKit): sizes are asked again.
     static var layoutEpoch = 0

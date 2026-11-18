@@ -23,6 +23,10 @@
 - (oneway void)release { _objc_rootRelease(self); }
 - (instancetype)autorelease { return _objc_rootAutorelease(self); }
 - (NSUInteger)retainCount { return _objc_rootRetainCount(self); }
+/* Apple's private retain-if-alive pair: runtimes that subclass NSObject at run time look them up on NSObject and
+   override them (Kotlin/Native's CreateKotlinObjCClass asserts on _tryRetain) */
+- (BOOL)_tryRetain { if (_objc_rootIsDeallocating(self)) return NO; [self retain]; return YES; }
+- (BOOL)_isDeallocating { return _objc_rootIsDeallocating(self); }
 - (NSZone *)zone { return NULL; }
 + (instancetype)retain { return (id)self; }
 + (oneway void)release {}

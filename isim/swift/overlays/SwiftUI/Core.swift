@@ -157,7 +157,16 @@ func _typeName(_ t: Any.Type) -> String { String(describing: t) }
     return n
 }
 @MainActor private func _resolveView(_ view: any View, _ ctx: _Context) -> _Node {
-    let view = _animatableHook(view, ctx)          // Animatable views: in-flight values while animating
+    let animatable = view as? any Animatable
+    // views that may redraw on their own (in-flight animatable data, TimelineView) are local refresh scopes: a frame
+    // they ask for re-evaluates only them (LocalRefresh.swift)
+    guard animatable != nil || view is _LocalRefreshView else { return _resolveViewBody(view, ctx) }
+    ctx.graph._beginScope(ctx.path)
+    let n = _resolveViewBody(animatable.map { _animatableHook($0, view, ctx) } ?? view, ctx)   // (in-flight values)
+    ctx.graph._endScope(view, ctx, n)
+    return n
+}
+@MainActor private func _resolveViewBody(_ view: any View, _ ctx: _Context) -> _Node {
     if let r = view as? any UIViewRepresentable { _attach(view, ctx); return _representableNode(r, ctx) }
     if let r = view as? any UIViewControllerRepresentable { _attach(view, ctx); return _vcRepresentableNode(r, ctx) }
     if let p = view as? _PrimitiveView {

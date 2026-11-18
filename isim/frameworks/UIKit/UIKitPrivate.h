@@ -15,6 +15,14 @@
 
 /* frame scheduling */
 void isim_ui_set_needs_display(void);
+void isim_ui_damage_begin(void);                              /* partial frames (UIGraphicsBase.m) */
+void isim_ui_damage_end(double x, double y, double w, double h);
+int isim_ui_take_damage(double *out);                       /* up to 8 rectangles (x, y, w, h) */
+@class UIView;
+void isim_ui_content_drop(UIView *v);                         /* content caches (UIView.m) */
+void isim_ui_content_changed(UIView *v);
+void isim_ui_content_cacheable(Class c);
+uint64_t isim_ui_content_base_signature(UIView *v);
 void isim_ui_set_needs_layout(void);
 BOOL isim_ui_take_display(void);
 BOOL isim_ui_take_layout(void);
@@ -123,6 +131,7 @@ void isim_ui_draw_attributed(NSAttributedString *s, UIFont *_Nullable font, UICo
 - (void)_isim_setViewController:(UIViewController *)vc;
 - (void)_isim_render;
 - (void)_isim_drawContent;                  /* subclass content (label text, button title, ...) */
+- (uint64_t)_isim_contentSignature;         /* the state the view's own drawing depends on; 0: not cached (UIView.m) */
 - (CGRect)_isim_presentedFrame:(CGFloat *)alpha radius:(CGFloat *)radius;   /* frame / alpha / corner radius as drawn now */
 - (BOOL)_isim_cornerRadii:(double *)out size:(CGSize)size radius:(double)radius;   /* per-corner radii; YES if they differ */
 - (CGFloat)_isim_uniformRadius;             /* the corner radius for single-radius shapes (glass) */

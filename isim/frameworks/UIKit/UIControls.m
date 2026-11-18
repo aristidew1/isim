@@ -18,10 +18,14 @@
     }
     return self;
 }
-- (void)_changed { [self invalidateIntrinsicContentSize]; isim_ui_set_needs_display(); }
+/* (setters that keep the value change nothing: the label's cached drawing stays, UIView.m) */
+- (void)_changed { [self invalidateIntrinsicContentSize]; [self setNeedsDisplay]; }
 - (void)setText:(NSString *)t { BOOL had = _attributedText != nil; _attributedText = nil; if (!had && (t == _text || [t isEqualToString:_text])) return; _text = [t copy]; [self _changed]; }
 @synthesize attributedText = _attributedText;
-- (void)setAttributedText:(NSAttributedString *)a { _attributedText = [a copy]; _text = [a.string copy]; [self _changed]; }
+- (void)setAttributedText:(NSAttributedString *)a {
+    if (_attributedText && (a == _attributedText || [a isEqual:_attributedText])) return;
+    _attributedText = [a copy]; _text = [a.string copy]; [self _changed];
+}
 - (NSAttributedString *)attributedText {
     if (_attributedText) return _attributedText;
     if (!_text) return nil;
@@ -39,8 +43,8 @@
     s.height += o.top + o.bottom;
     return s;
 }
-- (void)setSizingRule:(UILetterformAwareSizingRule)r { _sizingRule = r; [self _changed]; }
-- (void)setBaselineAdjustment:(UIBaselineAdjustment)b { _baselineAdjustment = b; isim_ui_set_needs_display(); }
+- (void)setSizingRule:(UILetterformAwareSizingRule)r { if (r == _sizingRule) return; _sizingRule = r; [self _changed]; }
+- (void)setBaselineAdjustment:(UIBaselineAdjustment)b { if (b == _baselineAdjustment) return; _baselineAdjustment = b; [self setNeedsDisplay]; }
 /* a truncated label shows its full text as a tooltip on iPad (UIToolTipInteraction, UIHover.m) */
 - (void)setShowsExpansionTextWhenTruncated:(BOOL)b { _showsExpansionTextWhenTruncated = b; [self _isim_updateExpansion]; }
 - (BOOL)_isim_truncated {
@@ -56,15 +60,27 @@
     i.defaultToolTip = want ? _text : nil;
 }
 - (void)layoutSubviews { [super layoutSubviews]; if (_showsExpansionTextWhenTruncated) [self _isim_updateExpansion]; }
-- (void)setFont:(UIFont *)f { _font = f ?: [UIFont systemFontOfSize:17]; [self _changed]; }
-- (void)setTextColor:(UIColor *)c { _textColor = c ?: UIColor.labelColor; isim_ui_set_needs_display(); }
-- (void)setShadowColor:(UIColor *)c { _shadowColor = c; isim_ui_set_needs_display(); }
-- (void)setShadowOffset:(CGSize)o { _shadowOffset = o; isim_ui_set_needs_display(); }
-- (void)setTextAlignment:(NSTextAlignment)a { _textAlignment = a; isim_ui_set_needs_display(); }
-- (void)setNumberOfLines:(NSInteger)n { _numberOfLines = n; [self _changed]; }
-- (void)setPreferredMaxLayoutWidth:(CGFloat)w { _preferredMaxLayoutWidth = w; [self _changed]; }
-- (void)setEnabled:(BOOL)e { _enabled = e; isim_ui_set_needs_display(); }
-- (void)setHighlighted:(BOOL)h { _highlighted = h; isim_ui_set_needs_display(); }
+- (void)setFont:(UIFont *)f { f = f ?: [UIFont systemFontOfSize:17]; if (f == _font || [f isEqual:_font]) return; _font = f; [self _changed]; }
+- (void)setTextColor:(UIColor *)c { c = c ?: UIColor.labelColor; if (c == _textColor || [c isEqual:_textColor]) return; _textColor = c; [self setNeedsDisplay]; }
+- (void)setShadowColor:(UIColor *)c { if (c == _shadowColor || [c isEqual:_shadowColor]) return; _shadowColor = c; [self setNeedsDisplay]; }
+- (void)setShadowOffset:(CGSize)o { if (CGSizeEqualToSize(o, _shadowOffset)) return; _shadowOffset = o; [self setNeedsDisplay]; }
+- (void)setTextAlignment:(NSTextAlignment)a { if (a == _textAlignment) return; _textAlignment = a; [self setNeedsDisplay]; }
+- (void)setNumberOfLines:(NSInteger)n { if (n == _numberOfLines) return; _numberOfLines = n; [self _changed]; }
+- (void)setPreferredMaxLayoutWidth:(CGFloat)w { if (w == _preferredMaxLayoutWidth) return; _preferredMaxLayoutWidth = w; [self _changed]; }
+- (void)setEnabled:(BOOL)e { if (e == _enabled) return; _enabled = e; [self setNeedsDisplay]; }
+- (void)setHighlighted:(BOOL)h { if (h == _highlighted) return; _highlighted = h; [self setNeedsDisplay]; }
+/* the cached drawing (UIView.m) of a plain UILabel: its generation (the setters above), size and appearance, and the
+   properties set without a setter of their own; subclasses may draw from anything, so they are not cached */
+- (uint64_t)_isim_contentSignature {
+    if (object_getClass(self) != [UILabel class]) return [super _isim_contentSignature];
+    uint64_t h = isim_ui_content_base_signature(self);
+#define LC_MIX(x) (h = (h ^ (uint64_t)(x)) * 1099511628211ull)
+    LC_MIX(_lineBreakMode); LC_MIX(_adjustsFontSizeToFitWidth); LC_MIX(llround(_minimumScaleFactor * 1000));
+    LC_MIX(_allowsDefaultTighteningForTruncation); LC_MIX((uintptr_t)(__bridge void *)_highlightedTextColor);
+    LC_MIX(_highlightedTextColor.hash);
+#undef LC_MIX
+    return h | 1;
+}
 - (CGFloat)_wrapWidth {
     if (_numberOfLines == 1) return 0;
     if (_preferredMaxLayoutWidth > 0) return _preferredMaxLayoutWidth;

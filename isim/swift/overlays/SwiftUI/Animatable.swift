@@ -184,18 +184,20 @@ extension Animation {
 
 // MARK: - Per-frame ticking
 
-/// Re-renders a graph every frame while something in it animates outside UIKit's engine
-/// (animatable data, keyframes, TimelineView(.animation)).
+/// Re-renders every frame what animates outside UIKit's engine (animatable data, keyframes, TimelineView(.animation)):
+/// the scopes that asked (LocalRefresh.swift) re-evaluate on their own, the whole graph only when a request came from
+/// outside any scope or a scope cannot refresh in place.
 @MainActor final class _FrameTicker {
     static var tickers: [ObjectIdentifier: _FrameTicker] = [:]
     weak var graph: _Graph?
     var timer: Timer?
-    var requested = false               // a render since the last tick still animates
+    var requested = false               // a render since the last tick still animates outside any scope
+    var scopes: Set<String> = []        // local refresh scopes that still animate
     var awaitedRender: Int?             // the graph's render count when the ticker asked for a frame
     static func request(_ g: _Graph) {
         let id = ObjectIdentifier(g)
         let t = tickers[id] ?? { let t = _FrameTicker(); t.graph = g; tickers[id] = t; return t }()
-        t.requested = true
+        if let path = g._requestInScope() { t.scopes.insert(path) } else { t.requested = true }
         if t.timer == nil {
             t.timer = Timer._isimScheduledTimer(withTimeInterval: 1.0 / 60, repeats: true) { [weak t] _ in MainActor.assumeIsolated { t?.tick() } }
         }
@@ -205,13 +207,25 @@ extension Animation {
         // the frame asked for has not rendered yet (a busy main thread): wait for it rather than judge by time, or
         // a late timer would end an animation that is still running
         if let n = awaitedRender, g.renderCount == n { return }
+        awaitedRender = nil
         // a render ran without requesting another frame: every animation has ended
-        guard requested else { stop(); return }
-        requested = false
+        guard requested || !scopes.isEmpty else { stop(); return }
+        if requested { fullFrame(g); return }
+        // outermost first: refreshing a scope refreshes the scopes inside it
+        let paths = scopes.sorted { $0.count < $1.count }
+        scopes = []
+        var done: [String] = []
+        for p in paths where !done.contains(where: { _LocalScope.isInside(p, $0) }) {
+            guard g.refreshLocal(p) else { fullFrame(g); return }
+            done.append(p)
+        }
+    }
+    private func fullFrame(_ g: _Graph) {
+        requested = false; scopes = []
         awaitedRender = g.renderCount
         g.invalidate()
     }
-    func stop() { timer?.invalidate(); timer = nil; requested = false; awaitedRender = nil }
+    func stop() { timer?.invalidate(); timer = nil; requested = false; scopes = []; awaitedRender = nil }
 }
 
 // MARK: - Interpolation of animatable data during evaluation
@@ -231,9 +245,8 @@ final class _AnimatableState<D: VectorArithmetic> {
 }
 
 /// Called for every view evaluated: returns the view with in-flight animatable data while it animates.
-@MainActor func _animatableHook(_ view: any View, _ ctx: _Context) -> any View {
-    guard let a = view as? any Animatable else { return view }
-    return (_interpolate(a, ctx) as? any View) ?? view
+@MainActor func _animatableHook(_ a: any Animatable, _ view: any View, _ ctx: _Context) -> any View {
+    (_interpolate(a, ctx) as? any View) ?? view
 }
 
 @MainActor func _interpolate<A: Animatable>(_ a: A, _ ctx: _Context) -> A {

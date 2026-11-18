@@ -13,7 +13,7 @@ NS_ASSUME_NONNULL_BEGIN
 @class NSURL, NSString, NSData, NSError, NSDate, NSArray<ObjectType>, NSDictionary, NSOperationQueue, NSProgress, NSHTTPCookieStorage,
        NSURLCache, NSURLCredentialStorage, NSURLAuthenticationChallenge, NSURLSessionTask, NSURLSessionDataTask, NSURLSessionUploadTask,
        NSURLSessionDownloadTask, NSURLSessionStreamTask, NSCachedURLResponse, NSInputStream, NSOutputStream;
-@protocol NSURLSessionDelegate;
+@protocol NSURLSessionDelegate, NSURLSessionTaskDelegate;
 FOUNDATION_EXPORT const int64_t NSURLSessionTransferSizeUnknown;
 FOUNDATION_EXPORT const float NSURLSessionTaskPriorityDefault;
 FOUNDATION_EXPORT const float NSURLSessionTaskPriorityLow;
@@ -122,6 +122,7 @@ ISIM_RUNTIME_VISIBLE
 - (void)resume;
 @property float priority;
 @property BOOL prefersIncrementalDelivery;
+@property (nullable, retain) id<NSURLSessionTaskDelegate> delegate;
 @end
 
 ISIM_RUNTIME_VISIBLE

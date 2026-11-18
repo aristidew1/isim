@@ -219,8 +219,29 @@ static NSString *markup(NSAttributedString *s, UIFont *defFont, UIColor *defColo
     [m appendString:@"</span>"];
     return m;
 }
+/* The markup of a string, remembered: layout measures the same text many times (each proposal of each pass, every
+   render), and building the markup (attribute runs, colours, escaping) costs more than the measurement the host
+   then finds in its own cache. Entries match by content (the string with its attributes, the default font and
+   colour, the appearance colours resolve in), never by address. */
+struct mk_entry { NSAttributedString *s; UIFont *f; UIColor *c; NSString *markup; NSTextAlignment align; CGFloat spacing; NSUInteger h; UIUserInterfaceStyle style; };
+static struct mk_entry mk_cache[256];
 NSString *isim_ui_markup(NSAttributedString *s, UIFont *defFont, UIColor *defColor, NSTextAlignment *align, CGFloat *spacing) {
-    return markup(s, defFont, defColor, align, spacing, nil);
+    NSUInteger h = s.string.hash * 31 + s.length;
+    UIUserInterfaceStyle style = isim_ui_style();
+    struct mk_entry *e = &mk_cache[(h ^ (h >> 17)) & 255];
+    if (e->s && e->h == h && e->style == style && (e->f == defFont || [e->f isEqual:defFont]) && (e->c == defColor || [e->c isEqual:defColor])
+        && (e->s == s || [e->s isEqualToAttributedString:s])) {
+        /* (like markup(): only a string with a paragraph style changes what the caller passed) */
+        if (align && e->align != (NSTextAlignment)-1) *align = e->align;
+        if (spacing && !isnan(e->spacing)) *spacing = e->spacing;
+        return e->markup;
+    }
+    NSTextAlignment al = (NSTextAlignment)-1; CGFloat sp = NAN;     /* left as they are: no paragraph style */
+    NSString *m = markup(s, defFont, defColor, &al, &sp, nil);
+    e->s = [s copy]; e->f = defFont; e->c = defColor; e->markup = m; e->align = al; e->spacing = sp; e->h = h; e->style = style;
+    if (align && al != (NSTextAlignment)-1) *align = al;
+    if (spacing && !isnan(sp)) *spacing = sp;
+    return m;
 }
 /* NSShadow: the distinct shadows in a string, and the markup of one's shadow pass */
 NSArray<NSShadow *> *isim_ui_shadows(NSAttributedString *s) {

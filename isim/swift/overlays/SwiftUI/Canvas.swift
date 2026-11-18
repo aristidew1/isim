@@ -63,12 +63,15 @@ final class _CanvasNode: _Node {
     }
 }
 final class _SUICanvasView: UIView {
-    var renderer: ((inout GraphicsContext, CGSize) -> Void)?
-    var env = EnvironmentValues()
-    var symbols: [AnyHashable: GraphicsContext._Symbol] = [:]
+    // (what it draws is set at each mount: its pixels are kept between mounts, UIView.m's content caches)
+    var renderer: ((inout GraphicsContext, CGSize) -> Void)? { didSet { setNeedsDisplay() } }
+    var env = EnvironmentValues() { didSet { setNeedsDisplay() } }
+    var symbols: [AnyHashable: GraphicsContext._Symbol] = [:] { didSet { setNeedsDisplay() } }
     /// the symbol views: never shown, drawn into the canvas by resolveSymbol / draw
     let symbolHost = _PassthroughView()
+    static let cacheable: Void = _isimContentCacheable(_SUICanvasView.self)
     override init(frame: CGRect) {
+        _ = Self.cacheable
         super.init(frame: frame); backgroundColor = .clear; isUserInteractionEnabled = false
         symbolHost.isHidden = true
         addSubview(symbolHost)
@@ -298,9 +301,11 @@ public struct GraphicsContext {
         if let blendSpec { blendSpec.withUnsafeBufferPointer { isim_gfx_pop_group_filtered($0.baseAddress, 1, 0, 0, size.width, size.height) } }
         isim_gfx_restore()
     }
-    @MainActor func _paint(_ shading: Shading, bounds: CGRect) -> _Paint {
+    /// `bounds` is measured only when the paint depends on it (a style that is a gradient): a fill of a plain color
+    /// does not flatten its path.
+    @MainActor func _paint(_ shading: Shading, bounds: @autoclosure () -> CGRect) -> _Paint {
         switch shading.kind {
-        case .style(let s): return _resolvePaint(s, in: bounds, environment)
+        case .style(let s): return _resolvePaint(s, in: bounds(), environment)
         case .linear(let g, let a, let b, let o): return .linear(g._stops, a, b, extend: o.extend)
         case .radial(let g, let c, let r0, let r1, let o): return .radial(g._stops, c, r0, r1, matrix: nil, extend: o.extend)
         case .conic(let g, let c, let a, _): return .conic(g._stops, c, a.radians, a.radians + 2 * .pi)
@@ -505,7 +510,7 @@ public struct TimelineViewDefaultContext {
 }
 
 /// Re-evaluates its content at the dates of a schedule (every frame for `.animation`).
-public struct TimelineView<Schedule: TimelineSchedule, Content: View>: View, _PrimitiveView {
+public struct TimelineView<Schedule: TimelineSchedule, Content: View>: View, _PrimitiveView, _LocalRefreshView {
     public typealias Context = TimelineViewDefaultContext
     let schedule: Schedule
     let content: (Context) -> Content
@@ -533,7 +538,9 @@ public struct TimelineView<Schedule: TimelineSchedule, Content: View>: View, _Pr
                 if n > 100_000 { break }
             }
         }
-        box.schedule(next, graph: g)
+        // the next entry re-evaluates this timeline alone (a local refresh scope), not the whole graph
+        if next != nil { _ = g._requestInScope() }
+        box.schedule(next, graph: g, path: ctx.path)
         return _resolve(content(Context(date: current, cadence: cadence)), ctx.child("tl"))
     }
 }
@@ -541,12 +548,16 @@ final class _TimelineBox {
     let start = Date()
     var timer: Timer?
     var fireDate: Date?
-    @MainActor func schedule(_ date: Date?, graph: _Graph) {
+    @MainActor func schedule(_ date: Date?, graph: _Graph, path: String) {
         if date == fireDate, timer != nil { return }
         timer?.invalidate(); timer = nil; fireDate = date
         guard let date else { return }
         timer = Timer._isimScheduledTimer(withTimeInterval: max(0.001, date.timeIntervalSinceNow), repeats: false) { [weak self, weak graph] _ in
-            MainActor.assumeIsolated { guard let self, self.timer != nil else { return }; self.timer = nil; self.fireDate = nil; graph?.invalidate() }
+            MainActor.assumeIsolated {
+                guard let self, self.timer != nil, let graph else { return }
+                self.timer = nil; self.fireDate = nil
+                if !graph.refreshLocal(path) { graph.invalidate() }
+            }
         }
     }
     deinit { timer?.invalidate() }

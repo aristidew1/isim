@@ -142,6 +142,7 @@ static void blur_a8(uint8_t *px, int w, int h, int stride, int r, int horizontal
     #undef DIV
 }
 
+static cairo_surface_t *blurred_alpha(const uint32_t *px, int stride, int w, int h, int pad, int r);
 /* Pops the group pushed with isim_gfx_push_group (its alpha is the shadow shape) and paints a shadow of it:
    colour rgba, Gaussian-like blur of `radius` points (CALayer.shadowRadius), offset (dx, dy) in user space. */
 ISIM_GUEST_ABI void isim_gfx_pop_group_shadow(const double *rgba, double radius, double dx, double dy) {
@@ -162,13 +163,7 @@ ISIM_GUEST_ABI void isim_gfx_pop_group_shadow(const double *rgba, double radius,
     int minx = sw, miny = sh, maxx = -1, maxy = -1;
     for (int y = 0; y < sh; y++) for (int x = 0; x < sw; x++) if (spx[y * ss + x] >> 24) { if (x < minx) minx = x; if (x > maxx) maxx = x; if (y < miny) miny = y; if (y > maxy) maxy = y; }
     if (maxx < 0) { cairo_pattern_destroy(pat); return; }
-    int W = maxx - minx + 1 + 2 * pad, H = maxy - miny + 1 + 2 * pad;
-    cairo_surface_t *a8 = cairo_image_surface_create(CAIRO_FORMAT_A8, W, H);
-    uint8_t *apx = cairo_image_surface_get_data(a8); int as = cairo_image_surface_get_stride(a8);
-    memset(apx, 0, (size_t)as * H);
-    for (int y = miny; y <= maxy; y++) for (int x = minx; x <= maxx; x++) apx[(y - miny + pad) * as + (x - minx + pad)] = spx[y * ss + x] >> 24;
-    for (int pass = 0; pass < 3; pass++) { blur_a8(apx, W, H, as, r, 1); blur_a8(apx, W, H, as, r, 0); }
-    cairo_surface_mark_dirty(a8);
+    cairo_surface_t *a8 = blurred_alpha(spx + (size_t)miny * ss + minx, ss, maxx - minx + 1, maxy - miny + 1, pad, r);
     double ddx = dx, ddy = dy; cairo_user_to_device_distance(cr, &ddx, &ddy);
     cairo_save(cr);
     cairo_identity_matrix(cr);
@@ -249,6 +244,98 @@ static void blur_argb(uint32_t *px, int w, int h, int stride, int r, int horizon
         #undef AT
     }
     free(tmp);
+}
+
+/* ---- blurs by content ----
+   A shadow or a blur is three box passes each way over its whole area, every frame it is drawn. What it blurs is
+   mostly the same from one frame to the next (a card's shadow while something else animates): results are kept by
+   a hash of the pixels they were made from, so the same input is blurred once. A different input (a moved edge, an
+   animating shape) hashes differently and is blurred anew. Least recently used results go past BLUR_KEEP or
+   BLUR_BYTES. ISIM_BLUR_CACHE=0 turns it off. */
+#define BLUR_KEEP 48
+#define BLUR_BYTES (96u << 20)
+struct blur_mem { uint64_t key; int w, h, r, kind; cairo_surface_t *a8; uint32_t *argb; size_t bytes; unsigned long last; };
+static struct blur_mem blur_mem[BLUR_KEEP]; static unsigned long blur_clock; static size_t blur_total; static int blur_on = -1;
+static int blur_cache_on(void) { if (blur_on < 0) { const char *e = getenv("ISIM_BLUR_CACHE"); blur_on = !(e && !strcmp(e, "0")); } return blur_on; }
+static inline uint64_t blur_mix(uint64_t h, uint64_t v) { h ^= v; h *= 0x9e3779b97f4a7c15ull; return h ^ (h >> 31); }
+/* the alpha bytes (kind 1) or the whole pixels (kind 2) of a region of premultiplied ARGB pixels */
+static uint64_t blur_hash(const uint32_t *px, int stride, int w, int h, int kind, int r) {
+    uint64_t hsh = blur_mix(blur_mix(blur_mix(0x51ed270b27f3a1c9ull, (uint64_t)w << 32 | (uint32_t)h), (uint64_t)r), (uint64_t)kind);
+    for (int y = 0; y < h; y++) {
+        const uint32_t *row = px + (size_t)y * stride;
+        int x = 0;
+        if (kind == 1) {
+            for (; x + 4 <= w; x += 4) hsh = blur_mix(hsh, (uint64_t)(row[x] >> 24) | (uint64_t)(row[x + 1] >> 24) << 8 | (uint64_t)(row[x + 2] >> 24) << 16 | (uint64_t)(row[x + 3] >> 24) << 24);
+            for (; x < w; x++) hsh = blur_mix(hsh, row[x] >> 24);
+        } else {
+            for (; x + 2 <= w; x += 2) hsh = blur_mix(hsh, (uint64_t)row[x] | (uint64_t)row[x + 1] << 32);
+            for (; x < w; x++) hsh = blur_mix(hsh, row[x]);
+        }
+    }
+    return hsh;
+}
+static struct blur_mem *blur_find(uint64_t key, int w, int h, int r, int kind) {
+    for (int i = 0; i < BLUR_KEEP; i++) {
+        struct blur_mem *e = &blur_mem[i];
+        if (e->bytes && e->key == key && e->w == w && e->h == h && e->r == r && e->kind == kind) { e->last = ++blur_clock; return e; }
+    }
+    return NULL;
+}
+static void blur_forget(struct blur_mem *e) {
+    if (e->a8) cairo_surface_destroy(e->a8);
+    free(e->argb);
+    blur_total -= e->bytes;
+    memset(e, 0, sizeof *e);
+}
+/* a free entry for a result of `bytes`, making room among the least recently used ones */
+static struct blur_mem *blur_slot(size_t bytes) {
+    if (bytes > BLUR_BYTES / 4) return NULL;
+    for (;;) {
+        struct blur_mem *victim = NULL, *empty = NULL;
+        for (int i = 0; i < BLUR_KEEP; i++) {
+            struct blur_mem *e = &blur_mem[i];
+            if (!e->bytes) { if (!empty) empty = e; continue; }
+            if (!victim || e->last < victim->last) victim = e;
+        }
+        if (empty && blur_total + bytes <= BLUR_BYTES) { empty->bytes = bytes; empty->last = ++blur_clock; blur_total += bytes; return empty; }
+        if (!victim) return NULL;
+        blur_forget(victim);
+    }
+}
+/* A blurred A8 mask of the alpha of a region (w x h at px) put `pad` pixels into a (w + 2 pad) x (h + 2 pad) mask,
+   r: the box radius (three passes each way). Returns a new reference. */
+static cairo_surface_t *blurred_alpha(const uint32_t *px, int stride, int w, int h, int pad, int r) {
+    int W = w + 2 * pad, H = h + 2 * pad;
+    uint64_t key = 0; int cached = blur_cache_on();
+    if (cached) {
+        key = blur_mix(blur_hash(px, stride, w, h, 1, r), (uint64_t)pad);
+        struct blur_mem *e = blur_find(key, W, H, r, 1);
+        if (e) return cairo_surface_reference(e->a8);
+    }
+    cairo_surface_t *a8 = cairo_image_surface_create(CAIRO_FORMAT_A8, W, H);
+    uint8_t *apx = cairo_image_surface_get_data(a8); int as = cairo_image_surface_get_stride(a8);
+    memset(apx, 0, (size_t)as * H);
+    for (int y = 0; y < h; y++) for (int x = 0; x < w; x++) apx[(size_t)(y + pad) * as + x + pad] = px[(size_t)y * stride + x] >> 24;
+    for (int pass = 0; pass < 3; pass++) { blur_a8(apx, W, H, as, r, 1); blur_a8(apx, W, H, as, r, 0); }
+    cairo_surface_mark_dirty(a8);
+    struct blur_mem *e = cached ? blur_slot((size_t)as * H) : NULL;
+    if (e) { e->key = key; e->w = W; e->h = H; e->r = r; e->kind = 1; e->a8 = cairo_surface_reference(a8); }
+    return a8;
+}
+/* blurs a region of premultiplied ARGB pixels in place (three box passes each way; edge: the edge pixels repeat) */
+static void blur_argb_region(uint32_t *px, int stride, int w, int h, int r, int edge) {
+    uint64_t key = 0; int cached = blur_cache_on();
+    if (cached) {
+        key = blur_mix(blur_hash(px, stride, w, h, 2, r), (uint64_t)edge);
+        struct blur_mem *e = blur_find(key, w, h, r, 2);
+        if (e) { for (int y = 0; y < h; y++) memcpy(px + (size_t)y * stride, e->argb + (size_t)y * w, sizeof *px * (size_t)w); return; }
+    }
+    for (int pass = 0; pass < 3; pass++) { blur_argb(px, w, h, stride, r, 1, edge); blur_argb(px, w, h, stride, r, 0, edge); }
+    struct blur_mem *e = cached ? blur_slot(sizeof *px * (size_t)w * h) : NULL;
+    if (e && (e->argb = malloc(e->bytes))) {
+        e->key = key; e->w = w; e->h = h; e->r = r; e->kind = 2;
+        for (int y = 0; y < h; y++) memcpy(e->argb + (size_t)y * w, px + (size_t)y * stride, sizeof *px * (size_t)w);
+    } else if (e) blur_forget(e);
 }
 
 /* a guest pixel shader over a group pushed with isim_gfx_push_group (SwiftUI's colorEffect, layerEffect and
@@ -351,19 +438,13 @@ ISIM_GUEST_ABI void isim_gfx_pop_group_filtered(const double *v, double alpha, d
                 int r = (int)lround(blur * 0.9);
                 if (flags & 4) {                       /* opaque: inside the view only, edges repeated */
                     int ax0 = vx0 < 0 ? 0 : vx0, ay0 = vy0 < 0 ? 0 : vy0, ax1 = vx1 > sw ? sw : vx1, ay1 = vy1 > sh ? sh : vy1;
-                    if (ax1 > ax0 && ay1 > ay0)
-                        for (int pass = 0; pass < 3; pass++) { blur_argb(px + ay0 * ss + ax0, ax1 - ax0, ay1 - ay0, ss, r, 1, 1); blur_argb(px + ay0 * ss + ax0, ax1 - ax0, ay1 - ay0, ss, r, 0, 1); }
-                } else
-                    for (int pass = 0; pass < 3; pass++) { blur_argb(px + Y0 * ss + X0, W, H, ss, r, 1, 0); blur_argb(px + Y0 * ss + X0, W, H, ss, r, 0, 0); }
+                    if (ax1 > ax0 && ay1 > ay0) blur_argb_region(px + ay0 * ss + ax0, ss, ax1 - ax0, ay1 - ay0, r, 1);
+                } else blur_argb_region(px + Y0 * ss + X0, ss, W, H, r, 0);
             }
             cairo_surface_mark_dirty(s);
             if (shadowA > 0) {                         /* drop shadow of the content's alpha, under it */
-                cairo_surface_t *a8 = cairo_image_surface_create(CAIRO_FORMAT_A8, W, H);
-                uint8_t *apx = cairo_image_surface_get_data(a8); int as = cairo_image_surface_get_stride(a8);
-                for (int yy = 0; yy < H; yy++) for (int xx = 0; xx < W; xx++) apx[yy * as + xx] = px[(yy + Y0) * ss + xx + X0] >> 24;
                 int r = (int)lround((sqrt(srad * srad + 1) - 1) / 2);
-                for (int pass = 0; pass < 3; pass++) { blur_a8(apx, W, H, as, r, 1); blur_a8(apx, W, H, as, r, 0); }
-                cairo_surface_mark_dirty(a8);
+                cairo_surface_t *a8 = blurred_alpha(px + (size_t)Y0 * ss + X0, ss, W, H, 0, r);
                 double ddx = v[27], ddy = v[28]; cairo_user_to_device_distance(cr, &ddx, &ddy);
                 cairo_save(cr);
                 cairo_identity_matrix(cr);
